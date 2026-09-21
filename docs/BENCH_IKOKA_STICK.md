@@ -23,13 +23,41 @@ macOS 15.6 that panicked the kernel in `com.apple.driver.usb.cdc`
 (observed 2026-09-18). Close any serial console before pressing reset
 for the same reason.
 
+## 0b. If the node hangs with a SOLID green LED and a dead console
+
+Symptom (seen 2026-09-21): USB enumerates, the port cannot be opened or
+never answers, green LED solid (not heartbeat). Cause: the WisBlock UF2
+(the portal's default GitHub release asset) was written to the XIAO. It
+links at 0x26000, which on the XIAO is the last page of the S140 v7.3.0
+SoftDevice; RatTunnel's InternalFS layer calls into the SoftDevice at
+boot and hangs. Proof: double-tap reset, copy `CURRENT.UF2` off
+`XIAO-BOOT`, and the 256-byte block at 0x26000 starts with an app vector
+table (`20040000 00064605 …`) instead of SoftDevice code.
+
+Repair without serial DFU:
+1. Download the XIAO bootloader hex that bundles S140 7.3.0 and matches
+   `INFO_UF2.TXT` (e.g. oltaco/Adafruit_nRF52_Bootloader_OTAFIX release
+   `xiao_nrf52840_ble_bootloader-0.9.2-OTAFIX1.2-BP1.2_s140_7.3.0.hex`).
+2. `python tools/make_sd_repair_uf2.py <that.hex>` → emits a UF2 that
+   covers only 0x1000..0x27000.
+3. Double-tap reset, drag the repair UF2 onto `XIAO-BOOT`. The app at
+   0x27000 is untouched; the node reboots straight into RatTunnel.
+
 ## 1. Flash and boot
 
 - [ ] Confirm `boards/xiao_nrf52840_s140v7.json` reports
       `sd_fwid 0x0123` and the build log shows `firmware.zip` built with
       `--sd-req 0x0123`.
-- [ ] Double-tap reset → `XIAO-SENSE` drive appears. Copy `firmware.uf2`.
-      Board reboots on its own.
+- [ ] Double-tap reset → `XIAO-BOOT` drive appears (INFO_UF2.TXT on the
+      bench board: UF2 Bootloader 0.9.2, SoftDevice S140 7.3.0). Copy the
+      **Ikoka** `firmware.uf2` from `.pio/build/ikoka_stick_transport/`.
+      Do NOT flash the portal's GitHub release asset on a XIAO: that is the
+      WisBlock image linked at 0x26000 and it overlaps the v7 SoftDevice.
+      The copy tool may report an I/O error as the drive ejects; that is
+      normal. Board reboots on its own.
+- [ ] Close every portal tab in the browser before using another serial
+      client: Web Serial keeps the port open (seen: five handles held by
+      Brave, which blocked the console entirely).
 - [ ] Serial console (115200) shows
       `[RNS] Ikoka Stick  |  RatTunnel V. 1.0.33`.
 - [ ] `version` prints `Board: Ikoka Stick (XIAO nRF52840 + E22-900M30S)`
@@ -137,7 +165,7 @@ therefore verifies what *is* persisted and documents the expected loss.
 ## 6. Button / DFU
 
 - [ ] Hold D0 (the user button) while pressing reset. All three LEDs
-      light for ~0.2 s, then the `XIAO-SENSE` drive appears. Release.
+      light for ~0.2 s, then the `XIAO-BOOT` drive appears. Release.
 - [ ] Console `dfu` does the same.
 - [ ] A short press at boot (< 2 s) does nothing; normal boot continues.
 

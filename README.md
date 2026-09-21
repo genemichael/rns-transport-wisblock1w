@@ -127,9 +127,21 @@ pio run -e ikoka_stick_transport
 ```
 
 Outputs land in `.pio/build/ikoka_stick_transport/` (`firmware.uf2` for
-drag-and-drop onto the `XIAO-SENSE` bootloader drive, `firmware.zip` for
+drag-and-drop onto the `XIAO-BOOT` bootloader drive, `firmware.zip` for
 `adafruit-nrfutil`). Double-tap reset to get the drive, or use the
 console `dfu` command, or **hold the D0 user button while resetting**.
+
+### Do not flash the WisBlock image onto a XIAO
+
+The portal's Flash tab lists every release asset. The WisBlock 1W UF2
+loads at 0x26000, which on the XIAO is the **last page of the S140
+v7.3.0 SoftDevice**; writing it leaves the board hung in setup (solid
+green LED, USB enumerated but the console never answers). The portal now
+refuses that write when the bootloader drive is named `XIAO-BOOT`, but a
+manual drag-and-drop is not protected. Always pick the
+`rns-transport-ikoka-stick-*.uf2` asset for this board. Recovery without
+serial DFU: `tools/make_sd_repair_uf2.py`, procedure in
+`docs/BENCH_IKOKA_STICK.md` §0b.
 
 ### Board revision — read this first
 
