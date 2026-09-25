@@ -105,8 +105,14 @@ bool RNSTransport::sendLocalAnnounce(const uint8_t* nameHash,
         announceData[RNS_KEYSIZE + RNS_NAME_HASH_LEN + i] = (uint8_t)random(0, 256);
     }
 
-    // Standard Reticulum layout: pubkey|nameHash|randomHash|appData|SIGNATURE.
-    // The signed bytes are destHash + pubkey + nameHash + randomHash + appData.
+    // Reference Reticulum layout (RNS/Destination.py announce()):
+    //   pubkey|nameHash|randomHash|SIGNATURE|appData
+    // signed bytes = destHash + pubkey + nameHash + randomHash + appData.
+    // (No ratchet: RatTunnel does not rotate keys, so the context flag
+    // stays clear and the signature sits at a fixed offset of 84.)
+    // Builds up to 1.0.33 put the signature AFTER appData, which the
+    // reference validator reads as a corrupt signature — a named
+    // RatTunnel node was invisible to Sideband/Columba/Ratspeak.
     static uint8_t signedBuf[RNS_MTU];
     memcpy(signedBuf, cachedTransportDestHash, RNS_ADDR_LEN);
     memcpy(signedBuf + RNS_ADDR_LEN, announceData, baseLen);
@@ -116,11 +122,10 @@ bool RNSTransport::sendLocalAnnounce(const uint8_t* nameHash,
     static uint8_t signature[RNS_SIGLENGTH];
     identity->sign(signedBuf, RNS_ADDR_LEN + baseLen + announceAppDataLen, signature);
 
-    // [appData before trailing signature]
+    memcpy(announceData + baseLen, signature, RNS_SIGLENGTH);
     if (announceAppData && announceAppDataLen > 0) {
-        memcpy(announceData + baseLen, announceAppData, announceAppDataLen);
+        memcpy(announceData + baseLen + RNS_SIGLENGTH, announceAppData, announceAppDataLen);
     }
-    memcpy(announceData + baseLen + announceAppDataLen, signature, RNS_SIGLENGTH);
 
     RNSPacket pkt;
     pkt.ifacFlag    = false;
