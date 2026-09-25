@@ -8,6 +8,7 @@
  * using default radio parameters — it never bricks.
  */
 #pragma once
+#include <stddef.h>
 #include "RNSConfig.h"
 #include "RNSIdentity.h"
 #include "RNSTransport.h"
@@ -58,6 +59,13 @@ struct LedConfigBlob {
     uint16_t alertIntervalSec;
     uint8_t alertWatchPrefixes[LED_ALERT_WATCH_MAX][LED_ALERT_PREFIX_BYTES];
     uint8_t alertWatchMasks[LED_ALERT_WATCH_MAX];
+    uint32_t checksum;
+};
+
+struct DisplayConfigBlob {
+    uint8_t  version;
+    uint8_t  enabled;      // 0 = panel stays dark, 1 = normal
+    uint16_t timeoutSec;   // 0 = never blank
     uint32_t checksum;
 };
 
@@ -370,6 +378,52 @@ public:
 #endif
     }
 
+    // ── Display config (/display.bin) ────────────────────────
+    static uint32_t computeDisplayChecksum(const DisplayConfigBlob& cfg) {
+        // FNV-1a over everything before the checksum field.
+        uint32_t h = 2166136261UL;
+        const uint8_t* b = (const uint8_t*)&cfg;
+        for (size_t i = 0; i < offsetof(DisplayConfigBlob, checksum); i++) {
+            h ^= b[i]; h *= 16777619UL;
+        }
+        return h;
+    }
+
+    bool loadDisplayConfig(DisplayConfigBlob& cfg) {
+#ifndef NATIVE_TEST
+        if (!fsReady) return false;
+        File f = InternalFS.open(DISPLAY_CONFIG_FILE, FILE_O_READ);
+        if (!f) return false;
+        DisplayConfigBlob stored;
+        if (f.read((uint8_t*)&stored, sizeof(stored)) != sizeof(stored)) { f.close(); return false; }
+        f.close();
+        if (computeDisplayChecksum(stored) != stored.checksum) return false;
+        if (stored.version != DISPLAY_CONFIG_VERSION) { InternalFS.remove(DISPLAY_CONFIG_FILE); return false; }
+        if (stored.timeoutSec > DISPLAY_TIMEOUT_MAX_SEC) stored.timeoutSec = DISPLAY_TIMEOUT_MAX_SEC;
+        cfg = stored;
+        return true;
+#else
+        (void)cfg; return false;
+#endif
+    }
+
+    bool saveDisplayConfig(const DisplayConfigBlob& inputCfg) {
+#ifndef NATIVE_TEST
+        if (!fsReady) return false;
+        DisplayConfigBlob cfg = inputCfg;
+        cfg.version = DISPLAY_CONFIG_VERSION;
+        cfg.checksum = computeDisplayChecksum(cfg);
+        InternalFS.remove(DISPLAY_CONFIG_FILE);
+        File f = InternalFS.open(DISPLAY_CONFIG_FILE, FILE_O_WRITE);
+        if (!f) return false;
+        size_t written = f.write((uint8_t*)&cfg, sizeof(cfg));
+        f.close();
+        return written == sizeof(cfg);
+#else
+        (void)inputCfg; return false;
+#endif
+    }
+
     bool loadSecurityConfig(bool& enabled, bool& wipeOnBoot) {
 #ifndef NATIVE_TEST
         if (!fsReady) return false;
@@ -426,6 +480,7 @@ public:
         InternalFS.remove(ANNOUNCE_NAME_FILE);
         InternalFS.remove(MORSE_CONFIG_FILE);
         InternalFS.remove(LED_CONFIG_FILE);
+        InternalFS.remove(DISPLAY_CONFIG_FILE);
         InternalFS.remove(PATH_TABLE_FILE);
 #endif
     }

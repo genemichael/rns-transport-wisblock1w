@@ -7386,10 +7386,15 @@ function checkImageForDrive(dir, bytes) {
   const drive = (dir && dir.name) ? String(dir.name) : '';
   const isXiaoDrive = /XIAO/i.test(drive);
   const isRakDrive  = /RAK4631|WISBLOCK|RAK/i.test(drive);
+  const isHeltecDrive = /HT-N5262|HELTEC/i.test(drive);   // T096 bootloader drive: HT-n5262G
   const imageKind = base === 0x27000 ? 'S140 v7.3.0 (Ikoka Stick / XIAO nRF52840)'
-                  : base === 0x26000 ? 'S140 v6.1.1 (WisBlock 1W / RAK4631)'
+                  : base === 0x26000 ? 'S140 v6.1.1 (WisBlock 1W / RAK4631 / Heltec T096)'
                   : base === 0x1000  ? 'SoftDevice image'
                   : null;
+  if (isHeltecDrive && base === 0x27000) {
+    return `Refusing to write: this UF2 is the Ikoka Stick / XIAO image (loads at 0x27000), but the drive is "${drive}". ` +
+           'A Heltec T096 boots its app at 0x26000 (S140 v6.1.1), so this image would never run. Pick the rns-transport-heltec-t096 asset.';
+  }
   if (isXiaoDrive && base === 0x26000) {
     return `Refusing to write: this UF2 is the WisBlock 1W image (loads at 0x26000), but the drive is "${drive}". ` +
            'On a XIAO nRF52840 that address is the last page of the S140 v7.3.0 SoftDevice and the board will no longer boot. ' +

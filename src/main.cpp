@@ -26,6 +26,7 @@
 #include "RNSRadio.h"
 #include "RNSTransport.h"
 #include "RNSConsole.h"
+#include "RNSDisplay.h"
 #include "RNSPersistence.h"
 #include "RNSDfu.h"
 #include <nrf_wdt.h>
@@ -34,6 +35,9 @@
 // ── Global objects (static allocation) ────────────────────
 static RNSIdentity    nodeIdentity;
 static RNSRadio       radio;
+#if HAS_DISPLAY
+static RNSDisplay     display;
+#endif
 static RNSTransport   transport;
 static RNSConsole     console;
 static RNSPersistence persist;
@@ -1892,6 +1896,117 @@ void RNSConsole::cmdFactoryReset() {
     }
 }
 
+// ── Board battery sense (boards with PIN_BATT_ADC) ───────────
+#if defined(PIN_BATT_ADC)
+// Returns pack voltage in mV (0 if unreadable). The divider is gated:
+// ADC_Ctrl HIGH connects it, so no drain while idle.
+static uint32_t readBatteryMillivolts() {
+    pinMode(PIN_BATT_ADC_CTRL, OUTPUT);
+    digitalWrite(PIN_BATT_ADC_CTRL, HIGH);
+    delay(3);
+    analogReference(AR_INTERNAL_3_0);
+    analogReadResolution(12);
+    uint32_t acc = 0;
+    for (uint8_t i = 0; i < 8; i++) acc += (uint32_t)analogRead(PIN_BATT_ADC);
+    digitalWrite(PIN_BATT_ADC_CTRL, LOW);
+    float raw = (float)acc / 8.0f;
+    float mv = raw * (3000.0f / 4096.0f) * BATT_DIVIDER_MULT;
+    return (uint32_t)mv;
+}
+
+// Single-cell LiPo open-circuit curve, coarse.
+static int8_t batteryPercentFromMv(uint32_t mv) {
+    static const struct { uint16_t mv; uint8_t pct; } tbl[] = {
+        {4200,100},{4100,90},{4000,78},{3900,62},{3800,45},{3700,25},{3600,10},{3500,4},{3400,1},{3300,0}
+    };
+    if (mv >= tbl[0].mv) return 100;
+    for (uint8_t i = 1; i < sizeof(tbl)/sizeof(tbl[0]); i++) {
+        if (mv >= tbl[i].mv) {
+            uint32_t span = tbl[i-1].mv - tbl[i].mv;
+            uint32_t frac = mv - tbl[i].mv;
+            return (int8_t)(tbl[i].pct + (tbl[i-1].pct - tbl[i].pct) * frac / span);
+        }
+    }
+    return 0;
+}
+
+static bool usbPowerPresent() {
+    return (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;
+}
+#endif
+
+// ── Runtime user button (short press → display wake / next page) ──
+#if PIN_USER_BUTTON >= 0
+static void pollUserButton(uint32_t now) {
+    static bool     wasPressed = false;
+    static uint32_t pressedAt  = 0;
+    static uint32_t lastEdge   = 0;
+    const int pressedLevel = BUTTON_ACTIVE_LOW ? LOW : HIGH;
+    bool pressed = (digitalRead(PIN_USER_BUTTON) == pressedLevel);
+    if (pressed != wasPressed && (now - lastEdge) < 30) return;   // debounce
+    if (pressed && !wasPressed) { pressedAt = now; lastEdge = now; }
+    if (!pressed && wasPressed) {
+        lastEdge = now;
+        uint32_t held = now - pressedAt;
+        if (held < 800) {
+#if HAS_DISPLAY
+            display.buttonPress(now);
+#endif
+        }
+        // ≥ 800 ms: reserved (no action yet)
+    }
+    wasPressed = pressed;
+}
+#endif
+
+#if HAS_DISPLAY
+static void persistDisplayConfig() {
+    DisplayConfigBlob blob = {};
+    blob.enabled    = display.enabled ? 1 : 0;
+    blob.timeoutSec = display.timeoutSec;
+    persist.saveDisplayConfig(blob);
+}
+#endif
+
+void RNSConsole::cmdDisplay(const char* args) {
+#if HAS_DISPLAY
+    uint32_t now = millis();
+    if (!args || !*args) {
+        io->println(F("── Display ──"));
+        io->print(F("  Panel:   ")); io->println(display.present ? F("ST7735 160x80 OK") : F("not initialised"));
+        io->print(F("  Enabled: ")); io->println(display.enabled ? F("yes") : F("no"));
+        io->print(F("  Awake:   ")); io->println(display.isAwake() ? F("yes") : F("no (blanked)"));
+        io->print(F("  Timeout: "));
+        if (display.timeoutSec == 0) io->println(F("never")); else { io->print(display.timeoutSec); io->println(F(" s")); }
+        io->print(F("  Page:    ")); io->println(display.currentPage() + 1);
+        io->println(F("  Usage: display timeout <0-3600> | on | off | page [1-3]"));
+        return;
+    }
+    if (strncmp(args, "timeout", 7) == 0) {
+        const char* v = args + 7; while (*v == ' ') v++;
+        if (!*v) { io->println(F("Usage: display timeout <seconds> (0 = never)")); return; }
+        long sec = atol(v);
+        if (sec < 0 || sec > DISPLAY_TIMEOUT_MAX_SEC) { io->println(F("Timeout must be 0-3600 s")); return; }
+        display.setTimeout((uint16_t)sec, now);
+        persistDisplayConfig();
+        io->print(F("Display timeout -> ")); if (sec == 0) io->println(F("never")); else { io->print(sec); io->println(F(" s")); }
+        return;
+    }
+    if (strcmp(args, "on") == 0)  { display.setEnabled(true, now);  persistDisplayConfig(); io->println(F("Display enabled"));  return; }
+    if (strcmp(args, "off") == 0) { display.setEnabled(false, now); persistDisplayConfig(); io->println(F("Display disabled")); return; }
+    if (strncmp(args, "page", 4) == 0) {
+        const char* v = args + 4; while (*v == ' ') v++;
+        if (*v) display.setPage((uint8_t)(atoi(v) - 1), now); else display.buttonPress(now);
+        io->print(F("Page ")); io->println(display.currentPage() + 1);
+        return;
+    }
+    io->println(F("Usage: display | display timeout <s> | display on|off | display page [n]"));
+#else
+    (void)args;
+    io->println(F("No display on this board"));
+#endif
+}
+
 // ── Setup ─────────────────────────────────────────────────
 void setup() {
     // LEDs
@@ -1901,6 +2016,18 @@ void setup() {
     if (PIN_LED_GREEN >= 0) digitalWrite(PIN_LED_GREEN, ledLevel(true));
     if (PIN_LED_BLUE >= 0) digitalWrite(PIN_LED_BLUE, ledLevel(false));
     if (PIN_LED_RED >= 0) digitalWrite(PIN_LED_RED, ledLevel(false));
+
+#if defined(BOARD_HELTEC_T096)
+    // ── Heltec T096: park the peripherals this firmware does not use ──
+    // Vext (TFT + backlight rail) stays off; the radio is on VDD_3V3.
+    // GNSS rail is a PMOS: HIGH = off. Both match the board's own
+    // power-on defaults, asserted here so a warm reboot from another
+    // firmware cannot leave them on. FEM pins are handled in RNSRadio.
+    pinMode(PIN_VEXT_CTRL, OUTPUT);
+    digitalWrite(PIN_VEXT_CTRL, LOW);
+    pinMode(PIN_GNSS_CTRL, OUTPUT);
+    digitalWrite(PIN_GNSS_CTRL, HIGH);
+#endif
 
     // ── User button → UF2 bootloader (boards with PIN_USER_BUTTON) ──
     // Hold the button through power-on for BUTTON_DFU_HOLD_MS and the
@@ -2058,6 +2185,19 @@ void setup() {
 
     // ── Console ───────────────────────────────────────────
     console.begin(&Serial, &transport, &radio, &nodeIdentity, &persist);    console.keepAlive = wdtFeed;
+
+#if HAS_DISPLAY
+    {
+        DisplayConfigBlob dcfg = {};
+        if (persist.loadDisplayConfig(dcfg)) {
+            display.enabled    = dcfg.enabled != 0;
+            display.timeoutSec = dcfg.timeoutSec;
+        }
+        display.begin(&transport, &radio, FW_VERSION_STRING);
+        Serial.print(F("[DISP] ST7735 160x80 ")); Serial.print(display.present ? F("initialised") : F("skipped"));
+        Serial.print(F(", timeout ")); Serial.print(display.timeoutSec); Serial.println(F(" s"));
+    }
+#endif
     // ── Watchdog ──────────────────────────────────────────
     wdtInit();
 
@@ -2165,4 +2305,21 @@ void loop() {
     }
 
     refreshLedOutputs(now);
+
+#if PIN_USER_BUTTON >= 0
+    pollUserButton(now);
+#endif
+#if HAS_DISPLAY
+    {
+#if defined(PIN_BATT_ADC)
+        static uint32_t nextBattAt = 0;
+        if (now >= nextBattAt) {
+            nextBattAt = now + 10000UL;
+            uint32_t mv = readBatteryMillivolts();
+            display.setBattery(mv > 2500 ? batteryPercentFromMv(mv) : -1, usbPowerPresent());
+        }
+#endif
+        display.loop(now);
+    }
+#endif
 }

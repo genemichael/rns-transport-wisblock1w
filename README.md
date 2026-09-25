@@ -1,4 +1,4 @@
-# RatTunnel V. 1.0.33 — WisBlock 1W / Ikoka Stick
+# RatTunnel V. 1.0.33 — WisBlock 1W / Ikoka Stick / Heltec T096
 
 > **Ikoka Stick (Seeed XIAO nRF52840 + EBYTE E22-900M30S) is an added
 > target** — env `ikoka_stick_transport`. See
@@ -115,6 +115,115 @@ save                     # persist the setting
 
 When `boot-reset` is on, each power cycle generates a fresh identity key pair — the node appears as a different Reticulum destination on every boot. The RatHole flag itself is preserved across wipes so the setting survives reboot.
 
+
+## Heltec Mesh Node T096 target (nRF52840 + SX1262 + KCT8103L)
+
+Hardware: [Heltec Mesh Node T096](https://heltec.org/project/t096/) —
+nRF52840, SX1262 with a KCT8103L front-end (PA + LNA, ~28 dBm), UC6580
+GNSS and a 0.96" TFT. RatTunnel uses the radio, the LED and the button;
+the TFT rail (Vext) and the GNSS rail are held off. Build with:
+
+```
+pio run -e heltec_t096_transport
+```
+
+Outputs land in `.pio/build/heltec_t096_transport/` (`firmware.uf2` for
+drag-and-drop onto the `HT-n5262G` bootloader drive). Double-tap reset
+to get the drive, or use the console `dfu` command, or **hold the user
+button while resetting**.
+
+### SoftDevice / linker
+
+The T096 ships Heltec's Adafruit-derived bootloader with S140 **v6.1.1**,
+so this target links at 0x26000 like the WisBlock 1W and uses the BSP's
+stock linker script (`boards/heltec_t096_s140v6.json`, provenance in
+`boards/README.md`). **Check `INFO_UF2.TXT` on the bootloader drive
+before the first flash** and confirm 6.1.1; the portal refuses the
+0x27000 (Ikoka) image on an `HT-n5262G` drive, but a manual drag of the
+wrong image is not protected.
+
+### TX power is a firmware invariant on this board
+
+| Constant | KCT8103L | Source |
+|---|---|---|
+| `LORA_TX_DBM_VARIANT_MAX` | 22 dBm | Meshtastic `heltec_mesh_node_t096` and MeshCore `heltec_t096` both allow the full SX1262 range ("Max SX1262 output -> ~28dBm at antenna") |
+| `LORA_TX_DBM_MAX_SAFE` (build cap) | 18 dBm | on the gain knee; nothing above it but current |
+| `LORA_TX_DBM` (default) | 18 dBm | |
+| `LORA_TX_DBM_ANNOUNCE_SAFE` | 18 dBm | |
+
+Derivation, verified 2026-09-25 against primary sources:
+
+| Fact | Value | Source |
+|---|---|---|
+| Pad between SX1262 and FEM TX input | 280 Ω series, 59 Ω / 59 Ω shunt = **21.1 dB** | Heltec schematic `Mesh_Node_T096_V0.2`, sheet 1 (R37/R38/R39) |
+| KCT8103L TX gain / Psat at 3.3 V | 33.0 dB / **28.0 dBm** | Kangxi Communication product portfolio, KCT8103L row |
+| Vfem supply | 3.3 V LDO (U5 TLV75733) | schematic |
+| Family absolute-max TX input | **+8 dBm** | KCT8101L datasheet rev C (sibling part; no KCT8103L datasheet obtainable) |
+
+So the FEM saturates at 16 dBm chip drive (−5 dBm at its input), the
+full 22 dBm chip drive delivers only +0.9 dBm to the FEM, 7 dB under
+the family absolute maximum, and the 18 dBm cap sits 2 dB past the
+saturation knee at −3.1 dBm FEM input. The Heltec V4 bench table in
+MeshCore issue #1708 (same FEM family) shows the same knee: 27–28 dBm
+conducted from setting 18 upward. Prns's measured T096 gain table
+agrees (net 14 dB at low drive tapering to 7 dB at 21 dBm).
+
+**Verify with a power meter before sustained TX** — see
+[docs/BENCH_HELTEC_T096.md](docs/BENCH_HELTEC_T096.md).
+
+### FEM control
+
+The KCT8103L has three control lines plus the SX1262's DIO2:
+
+| Net | GPIO | Firmware | Board default |
+|---|---|---|---|
+| VFEM_Ctrl (FEM LDO enable) | P0.30 | HIGH at radio init | 5.1 MΩ pull-up (on) |
+| PA_CSD (chip enable) | P0.12 | HIGH at radio init | 10 kΩ pulldown (**PA off**) |
+| PA_CTX (RX path) | P1.09 | LOW = 21 dB LNA | 10 kΩ pulldown (LNA) |
+| PA_CPS (TX/RX select) | SX1262 DIO2 | `setDio2AsRfSwitch(true)` | 10 kΩ pulldown |
+
+Because CSD has a pulldown, the PA stays off until `RNSRadio::begin()`
+asserts it; a firmware that never gets that far leaves the FEM idle.
+
+### Status display
+
+The 0.96" ST7735 TFT (160x80 landscape) shows a three-page dashboard,
+driven by `include/RNSDisplay.h` on the Adafruit GFX + ST7735 stack
+(the same driver family RNode firmware uses on Heltec TFTs). The panel
+sits on the Vext rail, which is only powered while the panel is awake.
+
+| Page | Content |
+|---|---|
+| 1 STATUS | name, battery % (or `USB`), uptime, free RAM, RX/TX/forwarded, announces/duplicates/invalid, RX/TX bytes, paths, last RSSI/SNR, radio one-liner |
+| 2 RADIO | frequency, bandwidth, SF, CR, preamble, TX drive and cap, sync word, RX mode, init result |
+| 3 PEERS | first seven path-table entries: hash, name, hops, RSSI, age |
+
+* **Button** (P1.10): a short press wakes a blanked panel, or advances
+  the page. The boot-time hold-for-DFU behaviour is unchanged.
+* **Timeout**: `display timeout <seconds>` (0 = never, max 3600, default
+  60) blanks the panel and drops the Vext rail; persisted in
+  `/display.bin`. `display on|off` parks the panel entirely;
+  `display page [n]` selects a page; `display` alone prints the state.
+* **Battery**: the on-board 390K/100K divider on P0.03 is gated by
+  P1.15 and read every 10 s. On USB power the top row shows `USB`.
+* Rows are cached and only redrawn when their text changes, so the 1 Hz
+  refresh normally repaints one or two rows.
+
+### Pin map
+
+From the Heltec V0.2 schematic net table, raw nRF52840 numbering:
+
+| Function | GPIO | # |
+|---|---|---|
+| SX1262 NSS / SCK / MOSI / MISO | P0.05 / P1.08 / P0.11 / P0.14 | 5 / 40 / 11 / 14 |
+| SX1262 RESET / BUSY / DIO1 | P0.16 / P0.19 / P0.21 | 16 / 19 / 21 |
+| Vext_Ctrl (TFT rail, held LOW) | P0.26 | 26 |
+| VGNSS_CTRL (PMOS, held HIGH = off) | P0.06 | 6 |
+| White LED (active HIGH) | P0.28 | 28 |
+| User button (active LOW, 10 kΩ pull-up) | P1.10 | 42 |
+
+The SX1262 supply (VDD_IN / VBAT) is on the always-on VDD_3V3 LDO, not
+on Vext, so the radio runs with the display rail off.
 
 ## Ikoka Stick target (XIAO nRF52840 + E22-900M30S)
 

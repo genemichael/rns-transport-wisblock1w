@@ -39,3 +39,23 @@ carries the 6.1.1 headers. The Ikoka env puts this directory first on the
 include path so `nrf_soc.h` / `nrf_sdm.h` resolve to the v7 API. Nordic's
 license text is embedded in each header. The RAK env does not reference
 this directory.
+
+## heltec_t096_s140v6.json
+
+Heltec Mesh Node T096 (nRF52840 + SX1262 + KCT8103L FEM). The T096
+ships Heltec's Adafruit-derived UF2 bootloader with SoftDevice
+**S140 v6.1.1** (fwid 0x00B6) — the same SoftDevice generation as the
+RAK4631, so the app links at 0x26000 with the BSP's stock
+`nrf52840_s140_v6.ld` and the 6.1.1 API headers. No linker script or
+SoftDevice headers are added for this board.
+
+* `hwids`: Adafruit VID 0x239A; PID 0x8071 is what the bench board enumerates as in
+  normal mode (`HT_n5262G`, 2026-09-25); 0x8029/0x0029/0x002A/0x802A come from
+  the `softdevice` block are taken from MeshCore `boards/heltec_t096.json`.
+* `variant` is **pca10056** (raw GPIO numbering), like the other two
+  targets; `include/RNSConfig.h` carries the schematic-verified pin map.
+* Bootloader drive name: `HT-n5262G` (double-tap reset). Confirm the
+  SoftDevice in `INFO_UF2.TXT` reads S140 6.1.1 before the first flash;
+  a v7 bootloader would need the Ikoka-style 0x27000 layout instead.
+* `maximum_ram_size` = 0x40000 - 0x3400 (S140 v6 reservation, same as
+  `nrf52840_dk_adafruit`).

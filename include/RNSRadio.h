@@ -46,6 +46,8 @@ public:
     bool          pollMode = false;  // true when DIO1 ISR unavailable
     float         lastRSSI = 0.0f;
     float         lastSNR  = 0.0f;
+    uint32_t      rxBytes  = 0;      // on-air bytes received (incl. RNode header)
+    uint32_t      txBytes  = 0;      // on-air bytes sent (incl. RNode header)
     int           lastInitState = -1; // RadioLib error code from begin()
     uint8_t       initAttempts  = 0;
 
@@ -762,7 +764,7 @@ public:
         hwReady = true;
         Serial.println(F("[DIAG] SX1262 init OK — radio is live"));
 
-#else  // !RADIO_HAS_RAK_PIN_DISCOVERY — fixed, documented pin map (Ikoka Stick)
+#else  // !RADIO_HAS_RAK_PIN_DISCOVERY — fixed, documented pin map (Ikoka Stick, Heltec T096)
         // ── SPI on SPIM3 at the board's LoRa pins ────────────────
         // The pca10056 variant's default SPI is P1.13/P1.14/P1.15 which
         // happens to be the XIAO's D8/D9/D10, but we remap explicitly so
@@ -788,6 +790,24 @@ public:
         // RXEN idles LOW; RadioLib drives it HIGH only while in RX.
         pinMode(PIN_LORA_RXEN, OUTPUT);
         digitalWrite(PIN_LORA_RXEN, LOW);
+#endif
+#if defined(PIN_PA_CSD)
+        // On-board FEM (Heltec T096 KCT8103L): power the FEM rail, enable
+        // the chip, select the receive-LNA path. Done once, before the
+        // SX1262 reset, so the FEM is settled by the time RadioLib runs.
+        // Per-packet TX/RX switching is DIO2 → CPS (setDio2AsRfSwitch).
+        // The board's own pulldown on CSD keeps the PA off until here.
+        pinMode(PIN_PA_VFEM, OUTPUT);
+        digitalWrite(PIN_PA_VFEM, HIGH);
+        pinMode(PIN_PA_CTX, OUTPUT);
+        digitalWrite(PIN_PA_CTX, LOW);
+        pinMode(PIN_PA_CSD, OUTPUT);
+        digitalWrite(PIN_PA_CSD, HIGH);
+        delay(PA_SETTLE_MS);
+        Serial.print(F("[DIAG] FEM enabled: VFEM(P")); Serial.print(PIN_PA_VFEM);
+        Serial.print(F(")=1 CSD(P")); Serial.print(PIN_PA_CSD);
+        Serial.print(F(")=1 CTX(P")); Serial.print(PIN_PA_CTX);
+        Serial.println(F(")=0 (RX LNA)"));
 #endif
 
         // Hard reset, then wait for BUSY to drop.
@@ -840,8 +860,10 @@ public:
         }
         Serial.println(F("[DIAG]   findChip OK — SX1262 version string matched"));
 
-        // RF switch: E22 TXEN is hard-wired to SX1262 DIO2 on the Ikoka
-        // Stick (see RNSConfig.h); RXEN is a GPIO driven by RadioLib.
+        // RF switch: on the Ikoka Stick the E22 TXEN is hard-wired to
+        // SX1262 DIO2 and RXEN is a GPIO driven by RadioLib; on the
+        // Heltec T096 DIO2 drives the KCT8103L CPS pin and there is no
+        // RXEN (see RNSConfig.h).
         Serial.println(F("[DIAG] SX1262 configuring DIO2-as-TXEN / RXEN / DCDC..."));
         lora.setDio2AsRfSwitch(true);
 #if PIN_LORA_RXEN >= 0
@@ -899,6 +921,7 @@ public:
         if (state == RADIOLIB_ERR_NONE) {
             lastRSSI = lora.getRSSI();
             lastSNR  = lora.getSNR();
+            rxBytes += (uint32_t)len;
 
             // Verbose packet hex dump when enabled via 'pktdump' cmd
             if (dumpStream) {
@@ -1047,6 +1070,7 @@ public:
         // Clean up TX state inside RadioLib
         state = lora.finishTransmit();
         txActive = false;
+        if (txDone) txBytes += (uint32_t)txLen;
         rxFlag = false;   // TX_DONE raises the DIO1 ISR flag on boards with DIO1 wired
 
         if (!txDone) {
