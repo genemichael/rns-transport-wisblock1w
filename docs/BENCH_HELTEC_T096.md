@@ -120,6 +120,10 @@ captured frame verifies with Python Ed25519 at the new offsets.
       `discovery dump` validated with tools/validate_discovery.py against
       RNS 1.5.4's handler: VALID, field checks PASS. Frequency rounding
       fixed afterwards (914.9 MHz packed as 914900032 Hz).
+- [x] 2026-09-25: first `discovery now` failed with startTransmit rc=-4
+      (324 bytes > 255-byte SX1262 frame). Added RNode split framing;
+      re-flashed: "TX start: 255 bytes (frame 1/2)", "70 bytes (frame
+      2/2)", "TX done: rc=0 elapsed=771ms", "Discovery announce sent".
 - [ ] A Python RNS node on the same LoRa profile logs the discovery
       announce (rnsd with `discoverable` peer listing, or RMAP shows the
       node within one interval).

@@ -350,6 +350,7 @@ static_assert(LORA_TX_DBM >= LORA_TX_DBM_MIN && LORA_TX_DBM_ANNOUNCE_SAFE >= LOR
 // RatDeck/RNode LoRa framing
 #define RNODE_LORA_HEADER_ENABLED 1
 #define RNODE_LORA_HEADER_FLAGS_UNSPLIT 0x00
+#define RNODE_LORA_FLAG_SPLIT     0x01   // RNode: packet spans two LoRa frames
 
 // ── Transport tuning (fits comfortably in 256 KB RAM) ────
 #define PATH_TABLE_MAX      200

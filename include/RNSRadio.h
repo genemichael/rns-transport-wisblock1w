@@ -77,6 +77,12 @@ public:
     uint16_t curPreamble = LORA_PREAMBLE;
     uint8_t rnodeSeq = 0;
 
+    // Split-frame reassembly (RNode framing)
+    static const uint8_t SPLIT_SEQ_UNSET = 0xFF;
+    uint8_t  splitSeq = SPLIT_SEQ_UNSET;
+    uint16_t splitLen = 0;
+    uint8_t  splitBuf[RNS_MTU];
+
     // ── DIO1 ISR (minimal — just set flag) ────────────────
     static RNSRadio* instance;
 #ifndef NATIVE_TEST
@@ -942,15 +948,43 @@ public:
 
             const uint8_t* payload = buf;
             uint16_t payloadLen = (uint16_t)len;
+            bool deliver = true;
 #if RNODE_LORA_HEADER_ENABLED
             if (payloadLen <= 1) {
                 lora.startReceive();
                 return;
             }
+            // RNode air framing (see transmit()): reassemble split packets
+            // exactly as RNode_Firmware receive_callback() does.
+            const uint8_t header = buf[0];
+            const uint8_t seq    = (uint8_t)(header >> 4);
+            const bool    isSplit = (header & RNODE_LORA_FLAG_SPLIT) != 0;
             payload = &buf[1];
             payloadLen--;
+            if (isSplit) {
+                if (splitSeq == seq && splitLen > 0) {
+                    // second part: append and deliver the whole packet
+                    if (splitLen + payloadLen <= RNS_MTU) {
+                        memcpy(splitBuf + splitLen, payload, payloadLen);
+                        splitLen += payloadLen;
+                        payload = splitBuf;
+                        payloadLen = splitLen;
+                    } else {
+                        deliver = false;
+                    }
+                    splitSeq = SPLIT_SEQ_UNSET; splitLen = 0;
+                } else {
+                    // first part (fresh, or a different sequence than the one pending)
+                    splitSeq = seq; splitLen = 0;
+                    if (payloadLen <= RNS_MTU) { memcpy(splitBuf, payload, payloadLen); splitLen = payloadLen; }
+                    deliver = false;
+                }
+            } else if (splitSeq != SPLIT_SEQ_UNSET) {
+                // unsplit frame while a first half was pending: drop the half
+                splitSeq = SPLIT_SEQ_UNSET; splitLen = 0;
+            }
 #endif
-            if (transport) {
+            if (deliver && transport) {
                 transport->lastRxRSSI = lastRSSI;
                 transport->lastRxSNR  = lastSNR;
                 transport->ingestPacket(payload, payloadLen);
@@ -1026,55 +1060,70 @@ public:
             return false;
         }
 
-        uint8_t txBuf[RNS_MTU + 1];
-        const uint8_t* txData = data;
-        uint16_t txLen = len;
-    #if RNODE_LORA_HEADER_ENABLED
-        txBuf[0] = (uint8_t)(((rnodeSeq & 0x0F) << 4) | (RNODE_LORA_HEADER_FLAGS_UNSPLIT & 0x0F));
+        // ── RNode air framing ──────────────────────────────────
+        // One header byte per LoRa frame: [seq nibble << 4 | flags].
+        // A packet longer than 254 bytes goes out as two frames that
+        // share the sequence nibble and carry FLAG_SPLIT (bit 0): the
+        // first with 254 payload bytes, the second with the rest. This
+        // is RNode_Firmware transmit() exactly, so reference RNS nodes
+        // reassemble it, and it is what lets a 323-byte discovery
+        // announce (or any LXMF announce with ratchet + app data) leave
+        // this node at all: an SX1262 frame is capped at 255 bytes.
+        static const uint16_t FRAME_MAX = 255;
+        static const uint16_t FRAME_PAYLOAD_MAX = FRAME_MAX - 1;
+        uint8_t txBuf[FRAME_MAX];
+        const bool split = (len > FRAME_PAYLOAD_MAX);
+        const uint8_t header = (uint8_t)(((rnodeSeq & 0x0F) << 4) | (split ? RNODE_LORA_FLAG_SPLIT : 0));
         rnodeSeq = (uint8_t)((rnodeSeq + 1) & 0x0F);
-        memcpy(txBuf + 1, data, len);
-        txData = txBuf;
-        txLen = len + 1;
-    #endif
 
-        Serial.print(F("[DIAG] TX start: ")); Serial.print(txLen);
-        Serial.print(F(" bytes, txPower=")); Serial.print(curTxDbm);
-        Serial.println(F(" dBm"));
-
-        txActive = true;
-
-        // Non-blocking TX: RadioLib's blocking transmit() polls the DIO1
-        // GPIO for TX_DONE, but DIO1 is NC so it always times out.
-        // Use startTransmit() + SPI IRQ polling instead.
-        int state = lora.startTransmit(txData, txLen);
-        if (state != RADIOLIB_ERR_NONE) {
-            txActive = false;
-            Serial.print(F("[DIAG] startTransmit failed rc=")); Serial.println(state);
-            lora.startReceive();
-            return false;
-        }
-
-        // Poll SPI IRQ register for TX_DONE (max ~5 s for worst-case SF12)
-        static const uint32_t TX_TIMEOUT_MS = 5000;
-        uint32_t txWaitStart = millis();
+        int state = RADIOLIB_ERR_NONE;
         bool txDone = false;
-        while (millis() - txWaitStart < TX_TIMEOUT_MS) {
-            uint32_t irq = lora.getIrqFlags();
-            if (irq & (1UL << RADIOLIB_IRQ_TX_DONE)) {
-                txDone = true;
-                break;
+        uint16_t sent = 0;
+        uint8_t frameNo = 0;
+        while (sent < len) {
+            uint16_t chunk = len - sent;
+            if (chunk > FRAME_PAYLOAD_MAX) chunk = FRAME_PAYLOAD_MAX;
+            txBuf[0] = header;
+            memcpy(txBuf + 1, data + sent, chunk);
+            const uint16_t txLen = chunk + 1;
+
+            Serial.print(F("[DIAG] TX start: ")); Serial.print(txLen);
+            Serial.print(F(" bytes"));
+            if (split) { Serial.print(F(" (frame ")); Serial.print(frameNo + 1); Serial.print(F("/2)")); }
+            Serial.print(F(", txPower=")); Serial.print(curTxDbm);
+            Serial.println(F(" dBm"));
+
+            txActive = true;
+
+            // Non-blocking TX: RadioLib's blocking transmit() polls the DIO1
+            // GPIO for TX_DONE, but DIO1 is NC on the WisBlock so it always
+            // times out. Use startTransmit() + SPI IRQ polling instead.
+            state = lora.startTransmit(txBuf, txLen);
+            if (state != RADIOLIB_ERR_NONE) {
+                txActive = false;
+                Serial.print(F("[DIAG] startTransmit failed rc=")); Serial.println(state);
+                lora.startReceive();
+                return false;
             }
-            delay(1);
-        }
 
-        // Clean up TX state inside RadioLib
-        state = lora.finishTransmit();
-        txActive = false;
-        if (txDone) txBytes += (uint32_t)txLen;
-        rxFlag = false;   // TX_DONE raises the DIO1 ISR flag on boards with DIO1 wired
+            // Poll SPI IRQ register for TX_DONE (max ~5 s for worst-case SF12)
+            static const uint32_t TX_TIMEOUT_MS = 5000;
+            uint32_t txWaitStart = millis();
+            txDone = false;
+            while (millis() - txWaitStart < TX_TIMEOUT_MS) {
+                uint32_t irq = lora.getIrqFlags();
+                if (irq & (1UL << RADIOLIB_IRQ_TX_DONE)) { txDone = true; break; }
+                delay(1);
+            }
 
-        if (!txDone) {
-            state = RADIOLIB_ERR_TX_TIMEOUT;
+            // Clean up TX state inside RadioLib
+            state = lora.finishTransmit();
+            txActive = false;
+            rxFlag = false;   // TX_DONE raises the DIO1 ISR flag on boards with DIO1 wired
+            if (!txDone) { state = RADIOLIB_ERR_TX_TIMEOUT; break; }
+            txBytes += (uint32_t)txLen;
+            sent += chunk;
+            frameNo++;
         }
 
         uint32_t txElapsed = millis() - txStart;

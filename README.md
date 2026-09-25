@@ -225,6 +225,18 @@ From the Heltec V0.2 schematic net table, raw nRF52840 numbering:
 The SX1262 supply (VDD_IN / VBAT) is on the always-on VDD_3V3 LDO, not
 on Vext, so the radio runs with the display rail off.
 
+## Air framing: RNode split packets
+
+Every LoRa frame carries RNode's one-byte header (`seq << 4 | flags`).
+A Reticulum packet longer than 254 bytes is sent as two frames sharing
+the sequence nibble with the split flag (bit 0) set, 254 payload bytes
+in the first, the rest in the second, exactly as RNode_Firmware
+`transmit()` does; the receiver reassembles by sequence the way RNode's
+`receive_callback()` does. Before 2026-09-25 RatTunnel sent one frame
+per packet and never reassembled, so anything over 254 bytes on air
+(the map discovery announce, LXMF announces with a ratchet and a long
+name) was refused on TX with RadioLib rc -4 and counted as Invalid on RX.
+
 ## Map discovery announce (RMAP, `discoverable = yes`)
 
 All targets can announce themselves the way a Python RNS node does for a
