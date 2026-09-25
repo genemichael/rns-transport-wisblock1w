@@ -62,11 +62,6 @@ bool RNSTransport::sendLocalAnnounce(const uint8_t* nameHash,
                                      const uint8_t* appData,
                                      uint16_t appDataLen) {
     if (!radio || !identity || !identity->initialized) return false;
-    if (!radio->hwReady) {
-        Serial.println(F("[DIAG] sendLocalAnnounce: radio HW not ready, skipping"));
-        return false;
-    }
-
     if (!announceHashCacheReady) {
         uint8_t publicKeyForHash[RNS_KEYSIZE];
         identity->getPublicKey(publicKeyForHash);
@@ -74,11 +69,26 @@ bool RNSTransport::sendLocalAnnounce(const uint8_t* nameHash,
         computeNameHash10(RNS_TRANSPORT_DEST_NAME, cachedTransportNameHash);
         announceHashCacheReady = true;
     }
+    return sendAnnounceFor(cachedTransportDestHash,
+                           nameHash ? nameHash : cachedTransportNameHash,
+                           appData, appDataLen, appData == nullptr);
+}
+
+bool RNSTransport::sendAnnounceFor(const uint8_t destHash[RNS_ADDR_LEN],
+                                   const uint8_t nameHash[RNS_NAME_HASH_LEN],
+                                   const uint8_t* appData,
+                                   uint16_t appDataLen,
+                                   bool defaultNameAppData) {
+    if (!radio || !identity || !identity->initialized) return false;
+    if (!radio->hwReady) {
+        Serial.println(F("[DIAG] sendAnnounceFor: radio HW not ready, skipping"));
+        return false;
+    }
 
     const uint8_t* announceAppData = appData;
     uint16_t announceAppDataLen = appDataLen;
     uint8_t msgpackName[34];
-    if (!announceAppData) {
+    if (defaultNameAppData && !announceAppData) {
         announceAppDataLen = encodeAnnounceNameMsgPack(announceName, msgpackName, sizeof(msgpackName));
         announceAppData = (announceAppDataLen > 0) ? msgpackName : nullptr;
     }
@@ -92,14 +102,8 @@ bool RNSTransport::sendLocalAnnounce(const uint8_t* nameHash,
 
     // [pubkey 64B]
     identity->getPublicKey(announceData);
-
     // [nameHash 10B]
-    if (nameHash) {
-        memcpy(announceData + RNS_KEYSIZE, nameHash, RNS_NAME_HASH_LEN);
-    } else {
-        memcpy(announceData + RNS_KEYSIZE, cachedTransportNameHash, RNS_NAME_HASH_LEN);
-    }
-
+    memcpy(announceData + RNS_KEYSIZE, nameHash, RNS_NAME_HASH_LEN);
     // [randomBlob 10B]
     for (uint16_t i = 0; i < RNS_RANDOM_BLOB_LEN; i++) {
         announceData[RNS_KEYSIZE + RNS_NAME_HASH_LEN + i] = (uint8_t)random(0, 256);
@@ -114,7 +118,7 @@ bool RNSTransport::sendLocalAnnounce(const uint8_t* nameHash,
     // reference validator reads as a corrupt signature — a named
     // RatTunnel node was invisible to Sideband/Columba/Ratspeak.
     static uint8_t signedBuf[RNS_MTU];
-    memcpy(signedBuf, cachedTransportDestHash, RNS_ADDR_LEN);
+    memcpy(signedBuf, destHash, RNS_ADDR_LEN);
     memcpy(signedBuf + RNS_ADDR_LEN, announceData, baseLen);
     if (announceAppData && announceAppDataLen > 0) {
         memcpy(signedBuf + RNS_ADDR_LEN + baseLen, announceAppData, announceAppDataLen);
@@ -135,7 +139,7 @@ bool RNSTransport::sendLocalAnnounce(const uint8_t* nameHash,
     pkt.destType    = SINGLE;
     pkt.packetType  = ANNOUNCE;
     pkt.hops        = 0;
-    memcpy(pkt.destHash, cachedTransportDestHash, RNS_ADDR_LEN);
+    memcpy(pkt.destHash, destHash, RNS_ADDR_LEN);
     pkt.context = 0x00;
     pkt.data    = announceData;
     pkt.dataLen = totalDataLen;

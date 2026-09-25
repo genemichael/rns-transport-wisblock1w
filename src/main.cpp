@@ -27,6 +27,7 @@
 #include "RNSTransport.h"
 #include "RNSConsole.h"
 #include "RNSDisplay.h"
+#include "RNSDiscovery.h"
 #include "RNSPersistence.h"
 #include "RNSDfu.h"
 #include <nrf_wdt.h>
@@ -38,6 +39,8 @@ static RNSRadio       radio;
 #if HAS_DISPLAY
 static RNSDisplay     display;
 #endif
+static RNSDiscovery   discovery;
+uint8_t RNSDiscovery::workblock[DISCOVERY_WORKBLOCK_LEN];
 static RNSTransport   transport;
 static RNSConsole     console;
 static RNSPersistence persist;
@@ -1968,6 +1971,116 @@ static void persistDisplayConfig() {
 }
 #endif
 
+// ── Discovery (RMAP) announce ─────────────────────────────
+static void persistDiscoveryConfig() {
+    DiscoveryConfigBlob b = {};
+    b.enabled     = discovery.cfg.enabled ? 1 : 0;
+    b.haveHeight  = discovery.cfg.haveHeight ? 1 : 0;
+    b.latUdeg     = discovery.cfg.latUdeg;
+    b.lonUdeg     = discovery.cfg.lonUdeg;
+    b.heightM     = discovery.cfg.heightM;
+    b.intervalMin = discovery.cfg.intervalMin;
+    b.stampValid  = discovery.stampReady ? 1 : 0;
+    memcpy(b.stamp, discovery.stamp, sizeof(b.stamp));
+    memcpy(b.stampInfohash, discovery.stampInfohash, sizeof(b.stampInfohash));
+    persist.saveDiscoveryConfig(b);
+}
+
+static void printHexBytes(Stream* io, const uint8_t* p, uint16_t n) {
+    for (uint16_t i = 0; i < n; i++) { if (p[i] < 0x10) io->print('0'); io->print(p[i], HEX); }
+}
+
+void RNSConsole::cmdDiscovery(const char* args) {
+    uint32_t now = millis();
+    if (!args || !*args) {
+        io->println(F("── Interface discovery (rnstransport.discovery.interface) ──"));
+        io->print(F("  Enabled:   ")); io->println(discovery.cfg.enabled ? F("yes") : F("no"));
+        io->print(F("  Dest hash: ")); printHexBytes(io, discovery.destinationHash(), RNS_ADDR_LEN); io->println();
+        io->print(F("  Location:  "));
+        if (discovery.hasLocation()) {
+            io->print(discovery.cfg.latUdeg / 1e6, 6); io->print(F(", ")); io->print(discovery.cfg.lonUdeg / 1e6, 6);
+            if (discovery.cfg.haveHeight) { io->print(F(", ")); io->print(discovery.cfg.heightM); io->print(F(" m")); }
+            io->println();
+        } else io->println(F("not set (announce carries nil)"));
+        io->print(F("  Interval:  ")); io->print(discovery.cfg.intervalMin); io->println(F(" min"));
+        io->print(F("  Packed:    ")); io->print(discovery.packedLength()); io->println(F(" bytes"));
+        io->print(F("  Stamp:     "));
+        if (discovery.stampReady) { io->print(F("ready  ")); printHexBytes(io, discovery.stamp, 8); io->println(F("...")); }
+        else if (discovery.searching) { io->print(F("searching, ")); io->print(discovery.attempts); io->print(F(" attempts, "));
+                                        io->print((now - discovery.searchStartedAt) / 1000); io->println(F(" s")); }
+        else io->println(F("none (enable to compute)"));
+        io->print(F("  Announces: ")); io->print(discovery.announcesSent);
+        if (discovery.cfg.enabled && discovery.stampReady) {
+            io->print(F("  next in ")); io->print(discovery.nextAnnounceAt > now ? (discovery.nextAnnounceAt - now) / 1000 : 0); io->print(F(" s"));
+        }
+        io->println();
+        io->println(F("  Usage: discovery on|off | interval <min> | now | dump"));
+        return;
+    }
+    if (strcmp(args, "on") == 0)  { discovery.cfg.enabled = true;  discovery.refresh(now); persistDiscoveryConfig();
+                                    io->println(discovery.stampReady ? F("Discovery enabled (stamp cached)") : F("Discovery enabled; computing stamp (~65k hashes)")); return; }
+    if (strcmp(args, "off") == 0) { discovery.cfg.enabled = false; discovery.searching = false; persistDiscoveryConfig(); io->println(F("Discovery disabled")); return; }
+    if (strncmp(args, "interval", 8) == 0) {
+        long m = atol(args + 8);
+        if (m < DISCOVERY_INTERVAL_MIN_MIN || m > 1440) { io->println(F("Interval must be 5-1440 minutes")); return; }
+        discovery.cfg.intervalMin = (uint16_t)m; persistDiscoveryConfig();
+        io->print(F("Discovery interval -> ")); io->print(m); io->println(F(" min")); return;
+    }
+    if (strcmp(args, "now") == 0) {
+        if (!discovery.cfg.enabled) { io->println(F("Discovery is off")); return; }
+        if (!discovery.stampReady)  { io->println(F("Stamp not ready yet")); return; }
+        io->println(discovery.announce() ? F("Discovery announce sent") : F("Discovery announce failed"));
+        return;
+    }
+    if (strcmp(args, "dump") == 0) {
+        // Hex for tools/validate_discovery.py: app_data then dest hash then identity pubkey hash
+        static uint8_t buf[1 + DISCOVERY_PACKED_MAX + DISCOVERY_STAMP_LEN];
+        uint16_t n = discovery.buildAppData(buf, sizeof(buf));
+        io->print(F("PACKED ")); printHexBytes(io, discovery.packedBytes(), discovery.packedLength()); io->println();
+        io->print(F("INFOHASH ")); printHexBytes(io, discovery.currentInfohash(), 32); io->println();
+        if (n) { io->print(F("APPDATA ")); printHexBytes(io, buf, n); io->println(); }
+        else io->println(F("APPDATA (stamp not ready)"));
+        io->print(F("DEST ")); printHexBytes(io, discovery.destinationHash(), RNS_ADDR_LEN); io->println();
+        return;
+    }
+    io->println(F("Usage: discovery | discovery on|off | interval <min> | now | dump"));
+}
+
+void RNSConsole::cmdLocation(const char* args) {
+    uint32_t now = millis();
+    if (!args || !*args) {
+        io->print(F("Location: "));
+        if (discovery.hasLocation()) {
+            io->print(discovery.cfg.latUdeg / 1e6, 6); io->print(F(" ")); io->print(discovery.cfg.lonUdeg / 1e6, 6);
+            if (discovery.cfg.haveHeight) { io->print(F(" ")); io->print(discovery.cfg.heightM); io->print(F(" m")); }
+            io->println();
+        } else io->println(F("not set"));
+        io->println(F("Usage: location <lat> <lon> [height_m] | location clear"));
+        return;
+    }
+    if (strcmp(args, "clear") == 0) {
+        discovery.cfg.latUdeg = 0; discovery.cfg.lonUdeg = 0; discovery.cfg.haveHeight = false;
+        discovery.refresh(now); persistDiscoveryConfig(); io->println(F("Location cleared")); return;
+    }
+    char buf[96]; strncpy(buf, args, sizeof(buf) - 1); buf[sizeof(buf) - 1] = '\0';
+    char* save = nullptr;
+    char* a = strtok_r(buf, " ,", &save);
+    char* b = a ? strtok_r(nullptr, " ,", &save) : nullptr;
+    char* c = b ? strtok_r(nullptr, " ,", &save) : nullptr;
+    if (!a || !b) { io->println(F("Usage: location <lat> <lon> [height_m]")); return; }
+    double lat = atof(a), lon = atof(b);
+    if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) { io->println(F("Latitude -90..90, longitude -180..180")); return; }
+    discovery.cfg.latUdeg = (int32_t)(lat * 1e6 + (lat >= 0 ? 0.5 : -0.5));
+    discovery.cfg.lonUdeg = (int32_t)(lon * 1e6 + (lon >= 0 ? 0.5 : -0.5));
+    if (c) { long h = atol(c); if (h < -4000 || h > 30000) { io->println(F("Height -4000..30000 m")); return; }
+             discovery.cfg.heightM = (int16_t)h; discovery.cfg.haveHeight = true; }
+    else discovery.cfg.haveHeight = false;
+    discovery.refresh(now); persistDiscoveryConfig();
+    io->print(F("Location -> ")); io->print(lat, 6); io->print(F(", ")); io->print(lon, 6);
+    if (c) { io->print(F(", ")); io->print(discovery.cfg.heightM); io->print(F(" m")); }
+    io->println(discovery.cfg.enabled ? F("  (descriptor changed; stamp recomputes)") : F(""));
+}
+
 void RNSConsole::cmdDisplay(const char* args) {
 #if HAS_DISPLAY
     uint32_t now = millis();
@@ -2198,6 +2311,27 @@ void setup() {
         Serial.print(F(", timeout ")); Serial.print(display.timeoutSec); Serial.println(F(" s"));
     }
 #endif
+
+    // ── Interface discovery (RMAP) ──
+    {
+        DiscoveryConfigBlob dc = {};
+        if (persist.loadDiscoveryConfig(dc)) {
+            discovery.cfg.enabled     = dc.enabled != 0;
+            discovery.cfg.haveHeight  = dc.haveHeight != 0;
+            discovery.cfg.latUdeg     = dc.latUdeg;
+            discovery.cfg.lonUdeg     = dc.lonUdeg;
+            discovery.cfg.heightM     = dc.heightM;
+            discovery.cfg.intervalMin = dc.intervalMin ? dc.intervalMin : DISCOVERY_INTERVAL_DEFAULT_MIN;
+            if (dc.stampValid) {
+                memcpy(discovery.stamp, dc.stamp, sizeof(discovery.stamp));
+                memcpy(discovery.stampInfohash, dc.stampInfohash, sizeof(discovery.stampInfohash));
+                discovery.stampReady = true;
+            }
+        }
+        discovery.begin(&transport, &nodeIdentity, &radio);
+        Serial.print(F("[DISC] discovery ")); Serial.print(discovery.cfg.enabled ? F("on") : F("off"));
+        Serial.print(F(", stamp ")); Serial.println(discovery.stampReady ? F("cached") : (discovery.searching ? F("computing") : F("none")));
+    }
     // ── Watchdog ──────────────────────────────────────────
     wdtInit();
 
@@ -2309,6 +2443,11 @@ void loop() {
 #if PIN_USER_BUTTON >= 0
     pollUserButton(now);
 #endif
+    if (discovery.loop(now)) {
+        Serial.print(F("[DISC] stamp found after ")); Serial.print(discovery.attempts);
+        Serial.print(F(" attempts, ")); Serial.print((now - discovery.searchStartedAt) / 1000); Serial.println(F(" s"));
+        persistDiscoveryConfig();
+    }
 #if HAS_DISPLAY
     {
 #if defined(PIN_BATT_ADC)

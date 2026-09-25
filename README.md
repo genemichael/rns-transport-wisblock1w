@@ -225,6 +225,45 @@ From the Heltec V0.2 schematic net table, raw nRF52840 numbering:
 The SX1262 supply (VDD_IN / VBAT) is on the always-on VDD_3V3 LDO, not
 on Vext, so the radio runs with the display rail off.
 
+## Map discovery announce (RMAP, `discoverable = yes`)
+
+All targets can announce themselves the way a Python RNS node does for a
+discoverable interface, so the node shows up on RMAP-style maps with its
+position and radio parameters. Off by default.
+
+```
+location 47.043620 -122.872110 [height_m]   # or: location clear
+discovery on                                # computes the proof-of-work stamp once
+discovery                                   # state, stamp progress, next announce
+discovery interval <5-1440>                 # minutes, default 360 (6 h, the RNS default)
+discovery now                               # send one immediately
+discovery dump                              # PACKED / INFOHASH / APPDATA / DEST for validation
+```
+
+What goes on the air (`include/RNSDiscovery.h`): a normal announce for
+the destination `rnstransport.discovery.interface` from this node's
+identity, with app data `[flags 0x00][msgpack map][32-byte stamp]`. The
+map has the same keys and value types as `RNS/Discovery.py`
+(`RNodeInterface`, transport flag, identity hash, name, float64
+latitude/longitude/height or nil, frequency/bandwidth in Hz, SF, CR).
+The stamp is LXStamper hashcash: a 20-round HKDF workblock over the
+descriptor hash and a 32-byte nonce whose SHA-256 has 16 leading zero
+bits. The search keeps a SHA-256 midstate so each attempt is one
+compression; it runs in 48-attempt slices from the main loop (~65k
+attempts on average, a few seconds) and the result is cached in
+`/discovery.bin`, so it only recomputes when the name, position or
+radio parameters change.
+
+Validate a node's bytes against the reference implementation (needs the
+`rns` Python package):
+
+```
+python tools/validate_discovery.py < dump.txt     # paste `discovery dump` output
+```
+
+Bench 2026-09-25, T096: stamp found on-device, reference validator
+reports `VALID`, all handler field checks pass.
+
 ## Ikoka Stick target (XIAO nRF52840 + E22-900M30S)
 
 Hardware: [ndoo/ikoka-stick-meshtastic-device](https://github.com/ndoo/ikoka-stick-meshtastic-device),

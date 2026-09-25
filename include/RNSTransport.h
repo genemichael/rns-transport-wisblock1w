@@ -749,6 +749,12 @@ public:
     bool sendLocalAnnounce(const uint8_t* nameHash = nullptr,
                            const uint8_t* appData = nullptr,
                            uint16_t appDataLen = 0);
+    /// Announce an arbitrary SINGLE destination owned by this identity
+    /// (e.g. rnstransport.discovery.interface). Reference layout, no ratchet.
+    bool sendAnnounceFor(const uint8_t destHash[RNS_ADDR_LEN],
+                         const uint8_t nameHash[RNS_NAME_HASH_LEN],
+                         const uint8_t* appData, uint16_t appDataLen,
+                         bool defaultNameAppData);
     bool sendDiscoverySweep();
 
     // ── Send a message-bearing announce ──────────────────

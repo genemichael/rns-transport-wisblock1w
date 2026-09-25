@@ -406,6 +406,7 @@ static const uint8_t LED_CONFIG_VERSION = 3;
 #define MORSE_CONFIG_FILE    "/morse.bin"
 #define LED_CONFIG_FILE      "/leds.bin"
 #define DISPLAY_CONFIG_FILE  "/display.bin"
+#define DISCOVERY_CONFIG_FILE "/discovery.bin"
 #define SECURITY_CONFIG_FILE "/security.bin"
 #define PATH_TABLE_FILE      "/paths.bin"
 #define AUTH_FILE            "/auth.bin"

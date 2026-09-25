@@ -122,6 +122,8 @@ private:
         else if (strcmp(command, "power")     == 0) cmdPower(args);
         else if (strcmp(command, "led")       == 0) cmdLed(args);
         else if (strcmp(command, "display")   == 0) cmdDisplay(args);
+        else if (strcmp(command, "discovery") == 0) cmdDiscovery(args);
+        else if (strcmp(command, "location")  == 0) cmdLocation(args);
         else if (strcmp(command, "rathole")   == 0) cmdRathole(args);
         else if (strcmp(command, "save")      == 0) cmdSave();
         else if (strcmp(command, "factory-reset") == 0) cmdFactoryReset();
@@ -590,6 +592,8 @@ private:
     // ── led — configure board LED behavior ───────────────
     void cmdLed(const char* args);  // implemented in main.cpp
     void cmdDisplay(const char* args);  // implemented in main.cpp
+    void cmdDiscovery(const char* args);  // implemented in main.cpp
+    void cmdLocation(const char* args);   // implemented in main.cpp
 
     // ── factory-reset ─────────────────────────────────────
     void cmdFactoryReset();  // implemented in main.cpp
@@ -1962,6 +1966,8 @@ private:
         io->println(F("  power          Set announce/discovery cadence"));
         io->println(F("  led            Configure green/blue board LED behavior"));
         io->println(F("  display        TFT: display | timeout <s> | on | off | page"));
+        io->println(F("  discovery      Map announce: discovery | on | off | interval <min> | now | dump"));
+        io->println(F("  location       location <lat> <lon> [height_m] | location clear"));
         io->println(F("  rathole        Configure secure boot-scrub mode"));
         io->println(F("  save           Persist config to flash"));
         io->println(F("  factory-reset  Erase all persisted data"));

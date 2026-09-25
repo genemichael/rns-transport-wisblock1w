@@ -69,6 +69,21 @@ struct DisplayConfigBlob {
     uint32_t checksum;
 };
 
+struct DiscoveryConfigBlob {
+    uint8_t  version;         // DISCOVERY_CONFIG_VERSION
+    uint8_t  enabled;
+    uint8_t  haveHeight;
+    uint8_t  stampValid;
+    int32_t  latUdeg;
+    int32_t  lonUdeg;
+    int16_t  heightM;
+    uint16_t intervalMin;
+    uint8_t  stamp[32];
+    uint8_t  stampInfohash[32];
+    uint32_t checksum;
+};
+#define DISCOVERY_CONFIG_VERSION 1
+
 struct SecurityConfigBlob {
     uint8_t enabled;
     uint8_t wipeOnBoot;
@@ -414,7 +429,48 @@ public:
         cfg.version = DISPLAY_CONFIG_VERSION;
         cfg.checksum = computeDisplayChecksum(cfg);
         InternalFS.remove(DISPLAY_CONFIG_FILE);
+        InternalFS.remove(DISCOVERY_CONFIG_FILE);
         File f = InternalFS.open(DISPLAY_CONFIG_FILE, FILE_O_WRITE);
+        if (!f) return false;
+        size_t written = f.write((uint8_t*)&cfg, sizeof(cfg));
+        f.close();
+        return written == sizeof(cfg);
+#else
+        (void)inputCfg; return false;
+#endif
+    }
+
+    // ── Discovery config + stamp cache (/discovery.bin) ─────
+    static uint32_t computeDiscoveryChecksum(const DiscoveryConfigBlob& cfg) {
+        uint32_t h = 2166136261UL;
+        const uint8_t* b = (const uint8_t*)&cfg;
+        for (size_t i = 0; i < offsetof(DiscoveryConfigBlob, checksum); i++) { h ^= b[i]; h *= 16777619UL; }
+        return h;
+    }
+    bool loadDiscoveryConfig(DiscoveryConfigBlob& cfg) {
+#ifndef NATIVE_TEST
+        if (!fsReady) return false;
+        File f = InternalFS.open(DISCOVERY_CONFIG_FILE, FILE_O_READ);
+        if (!f) return false;
+        DiscoveryConfigBlob stored;
+        if (f.read((uint8_t*)&stored, sizeof(stored)) != sizeof(stored)) { f.close(); return false; }
+        f.close();
+        if (computeDiscoveryChecksum(stored) != stored.checksum) return false;
+        if (stored.version != DISCOVERY_CONFIG_VERSION) { InternalFS.remove(DISCOVERY_CONFIG_FILE); return false; }
+        cfg = stored;
+        return true;
+#else
+        (void)cfg; return false;
+#endif
+    }
+    bool saveDiscoveryConfig(const DiscoveryConfigBlob& inputCfg) {
+#ifndef NATIVE_TEST
+        if (!fsReady) return false;
+        DiscoveryConfigBlob cfg = inputCfg;
+        cfg.version = DISCOVERY_CONFIG_VERSION;
+        cfg.checksum = computeDiscoveryChecksum(cfg);
+        InternalFS.remove(DISCOVERY_CONFIG_FILE);
+        File f = InternalFS.open(DISCOVERY_CONFIG_FILE, FILE_O_WRITE);
         if (!f) return false;
         size_t written = f.write((uint8_t*)&cfg, sizeof(cfg));
         f.close();

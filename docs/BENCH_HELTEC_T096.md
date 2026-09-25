@@ -114,6 +114,16 @@ captured frame verifies with Python Ed25519 at the new offsets.
 - [ ] `display off` → panel dark across a reboot; `display on` restores.
 - [ ] With a cell on JP1 and USB unplugged, top row shows a percentage.
 
+## 4c. Discovery announce
+
+- [x] 2026-09-25: `location` + `discovery on` → stamp computed on-device;
+      `discovery dump` validated with tools/validate_discovery.py against
+      RNS 1.5.4's handler: VALID, field checks PASS. Frequency rounding
+      fixed afterwards (914.9 MHz packed as 914900032 Hz).
+- [ ] A Python RNS node on the same LoRa profile logs the discovery
+      announce (rnsd with `discoverable` peer listing, or RMAP shows the
+      node within one interval).
+
 ## 5. Radio-with-Vext-off check
 
 Prns keeps Vext on and claims it feeds the radio; the V0.2 schematic
