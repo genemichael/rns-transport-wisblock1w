@@ -124,9 +124,10 @@ captured frame verifies with Python Ed25519 at the new offsets.
       (324 bytes > 255-byte SX1262 frame). Added RNode split framing;
       re-flashed: "TX start: 255 bytes (frame 1/2)", "70 bytes (frame
       2/2)", "TX done: rc=0 elapsed=771ms", "Discovery announce sent".
-- [ ] A Python RNS node on the same LoRa profile logs the discovery
-      announce (rnsd with `discoverable` peer listing, or RMAP shows the
-      node within one interval).
+- [x] 2026-09-25: rmap.world lists "RatTunnel Rhodedendron" at the
+      configured position (Gene confirmed). End-to-end: on-device stamp,
+      split-frame TX, relay via the network to an internet transport,
+      accepted by the RMAP collector.
 
 ## 5. Radio-with-Vext-off check
 
