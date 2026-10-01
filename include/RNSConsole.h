@@ -35,6 +35,7 @@ public:
     Stream*         io          = nullptr;
     bool            pktDumpEnabled = false;
     void          (*keepAlive)() = nullptr;  // WDT feed callback
+    void          (*statusExtra)(Stream*) = nullptr;  // board/feature lines appended to `status` (main.cpp)
 
     char    cmdBuf[128];
     uint8_t cmdPos = 0;
@@ -124,6 +125,7 @@ private:
         else if (strcmp(command, "display")   == 0) cmdDisplay(args);
         else if (strcmp(command, "discovery") == 0) cmdDiscovery(args);
         else if (strcmp(command, "location")  == 0) cmdLocation(args);
+        else if (strcmp(command, "gps")       == 0) cmdGps(args);
         else if (strcmp(command, "rathole")   == 0) cmdRathole(args);
         else if (strcmp(command, "save")      == 0) cmdSave();
         else if (strcmp(command, "factory-reset") == 0) cmdFactoryReset();
@@ -176,7 +178,16 @@ private:
         io->print(F("  Duplicates: ")); io->println(s.duplicates);
         io->print(F("  Invalid:    ")); io->println(s.invalidPackets);
         io->print(F("  Paths:      ")); io->println(s.pathEntries);
+        io->print(F("  RX bytes:   ")); io->println(radio->rxBytes);
+        io->print(F("  TX bytes:   ")); io->println(radio->txBytes);
+        if (radio->lastRSSI != 0.0f) {
+            io->print(F("  Last RSSI:  ")); io->print(radio->lastRSSI, 1); io->print(F(" dBm  SNR ")); io->print(radio->lastSNR, 1); io->println(F(" dB"));
+        }
+        io->print(F("  Radio:      ")); io->print(radio->curFreqMHz, 3); io->print(F(" MHz BW")); io->print(radio->curBwKHz, 0);
+        io->print(F(" SF")); io->print(radio->curSF); io->print(F(" CR4/")); io->print(radio->curCR);
+        io->print(F(" TX ")); io->print(radio->curTxDbm); io->print(F("/")); io->print(LORA_TX_DBM_MAX_SAFE); io->println(F(" dBm"));
         io->print(F("  Broadcast name: ")); io->println(transport->getAnnounceName());
+        if (statusExtra) statusExtra(io);
 #ifndef NATIVE_TEST
         io->print(F("  Free RAM:   ")); io->print(freeMemory()); io->println(F(" bytes"));
 #endif
@@ -594,6 +605,7 @@ private:
     void cmdDisplay(const char* args);  // implemented in main.cpp
     void cmdDiscovery(const char* args);  // implemented in main.cpp
     void cmdLocation(const char* args);   // implemented in main.cpp
+    void cmdGps(const char* args);        // implemented in main.cpp
 
     // ── factory-reset ─────────────────────────────────────
     void cmdFactoryReset();  // implemented in main.cpp
@@ -1968,6 +1980,7 @@ private:
         io->println(F("  display        TFT: display | timeout <s> | on | off | page"));
         io->println(F("  discovery      Map announce: discovery | on | off | interval <min> | now | dump"));
         io->println(F("  location       location <lat> <lon> [height_m] | location clear"));
+        io->println(F("  gps            GNSS: gps | on | off  (fills location, sets the clock)"));
         io->println(F("  rathole        Configure secure boot-scrub mode"));
         io->println(F("  save           Persist config to flash"));
         io->println(F("  factory-reset  Erase all persisted data"));

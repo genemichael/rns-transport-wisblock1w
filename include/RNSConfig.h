@@ -158,10 +158,18 @@ inline long random(long a, long b) { return a + (rand() % (b - a)); }
 #define PIN_PA_CTX          41   // P1.09  PA_CTX     → LOW (RX LNA path)
 #define PA_SETTLE_MS         5
 
-// Peripherals: GNSS rail held off by setup(); Vext (TFT rail) is owned
-// by RNSDisplay and is only high while the panel is awake.
+// Peripherals: Vext (TFT rail) is owned by RNSDisplay and is only high
+// while the panel is awake; the GNSS rail is owned by RNSGnss (`gps on`).
 #define PIN_VEXT_CTRL       26   // P0.26 → HIGH powers TFT + backlight rail
-#define PIN_GNSS_CTRL        6   // P0.06 → HIGH (GNSS rail off, PMOS)
+#define PIN_GNSS_CTRL        6   // P0.06 PMOS gate: LOW = GNSS rail on, HIGH = off
+
+// ── UC6580 GNSS (schematic sheet 1, U10) ──────────────────────────────
+#define HAS_GNSS             1
+#define PIN_GNSS_RX         23   // P0.23  GNSS_TX net → nRF UART RX
+#define PIN_GNSS_TX         25   // P0.25  GNSS_RX net ← nRF UART TX
+#define PIN_GNSS_RESET      46   // P1.14  active LOW, held HIGH
+#define PIN_GNSS_PPS        43   // P1.11  (unused)
+#define GNSS_BAUD           115200
 
 // ── 0.96" ST7735 TFT (80x160, "mini 160x80 plugin" init) ─────────────
 // Schematic sheet 1, FFC U2: SCL P0.20, SDA P0.17, RST P0.13, CS P0.22,
@@ -228,6 +236,13 @@ inline long random(long a, long b) { return a + (rand() % (b - a)); }
 #define BUTTON_ACTIVE_LOW    1
 #define BUTTON_DFU_HOLD_MS   2000
 #endif
+
+#ifndef HAS_GNSS
+#define HAS_GNSS             0
+#endif
+#define GNSS_CONFIG_VERSION  2
+#define GNSS_LOCATION_SYNC_MIN_M   100    // move this far before the map position updates
+#define GNSS_LOCATION_SYNC_HOLDOFF_MS (10UL * 60UL * 1000UL)
 
 // ── Display (boards with HAS_DISPLAY) ─────────────────────
 #ifndef HAS_DISPLAY
@@ -408,6 +423,7 @@ static const uint8_t LED_CONFIG_VERSION = 3;
 #define LED_CONFIG_FILE      "/leds.bin"
 #define DISPLAY_CONFIG_FILE  "/display.bin"
 #define DISCOVERY_CONFIG_FILE "/discovery.bin"
+#define GNSS_CONFIG_FILE     "/gps.bin"
 #define SECURITY_CONFIG_FILE "/security.bin"
 #define PATH_TABLE_FILE      "/paths.bin"
 #define AUTH_FILE            "/auth.bin"

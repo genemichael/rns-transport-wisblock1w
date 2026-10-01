@@ -28,6 +28,7 @@
 #include "RNSConsole.h"
 #include "RNSDisplay.h"
 #include "RNSDiscovery.h"
+#include "RNSGnss.h"
 #include "RNSPersistence.h"
 #include "RNSDfu.h"
 #include <nrf_wdt.h>
@@ -41,6 +42,10 @@ static RNSDisplay     display;
 #endif
 static RNSDiscovery   discovery;
 uint8_t RNSDiscovery::workblock[DISCOVERY_WORKBLOCK_LEN];
+#if HAS_GNSS
+static RNSGnss        gnss;
+static uint32_t gnssWallClock() { return gnss.unixNow(millis()); }
+#endif
 static RNSTransport   transport;
 static RNSConsole     console;
 static RNSPersistence persist;
@@ -2081,6 +2086,119 @@ void RNSConsole::cmdLocation(const char* args) {
     io->println(discovery.cfg.enabled ? F("  (descriptor changed; stamp recomputes)") : F(""));
 }
 
+#if HAS_GNSS
+static void persistGnssConfig() {
+    GnssConfigBlob b = {}; b.mode = (uint8_t)gnss.mode; b.intervalMin = gnss.intervalMin; b.dwellSec = gnss.dwellSec;
+    persist.saveGnssConfig(b);
+}
+#endif
+
+void RNSConsole::cmdGps(const char* args) {
+#if HAS_GNSS
+    uint32_t now = millis();
+    if (!args || !*args) {
+        io->println(F("── GNSS (UC6580) ──"));
+        io->print(F("  Mode:      ")); io->print(gnss.mode == RNSGnss::GNSS_ON ? F("on") : F("off"));
+        if (gnss.mode == RNSGnss::GNSS_ON) {
+            if (gnss.intervalMin) { io->print(F(", every ")); io->print(gnss.intervalMin); io->print(F(" min, dwell ")); io->print(gnss.dwellSec); io->print(F(" s")); }
+            else io->print(F(", continuous"));
+        }
+        io->println();
+        if (gnss.mode == RNSGnss::GNSS_ON && gnss.intervalMin) {
+            io->print(F("  Cycles:    ")); io->print(gnss.cycles); io->print(F(" run, ")); io->print(gnss.cyclesFixed); io->print(F(" fixed"));
+            if (!gnss.powered) { io->print(F(", next wake in ")); io->print(gnss.nextWakeAt > now ? (gnss.nextWakeAt - now) / 1000 : 0); io->print(F(" s")); }
+            io->println();
+        }
+        io->print(F("  Powered:   ")); io->print(gnss.powered ? F("yes, ") : F("no"));
+        if (gnss.powered) { io->print((now - gnss.poweredAt) / 1000); io->println(F(" s")); } else io->println();
+        io->print(F("  Sentences: ")); io->print(gnss.sentences); io->print(F(" ok, ")); io->print(gnss.badChecksum); io->print(F(" bad"));
+        if (gnss.lastSentenceAt) { io->print(F(", last ")); io->print((now - gnss.lastSentenceAt) / 1000); io->print(F(" s ago")); }
+        io->println();
+        io->print(F("  Fix:       "));
+        if (gnss.hasFix) {
+            io->print(F("yes  ")); io->print(gnss.latUdeg / 1e6, 6); io->print(F(", ")); io->print(gnss.lonUdeg / 1e6, 6);
+            if (gnss.hasAlt) { io->print(F(", ")); io->print(gnss.altM, 0); io->print(F(" m")); }
+            io->println();
+        } else io->println(gnss.powered ? F("no (searching)") : F("no"));
+        io->print(F("  Sats/qual: ")); io->print(gnss.sats); io->print(F(" / ")); io->print(gnss.fixQuality);
+        io->print(F("  HDOP ")); io->println(gnss.hdop, 1);
+        io->print(F("  Clock:     "));
+        uint32_t u = gnss.unixNow(now);
+        if (u) { io->print(F("unix ")); io->println(u); } else io->println(F("not set"));
+        io->println(F("  Usage: gps on|off | gps interval <min> (0 = continuous) | gps dwell <sec>"));
+        return;
+    }
+    if (strcmp(args, "on") == 0)  { gnss.setMode(RNSGnss::GNSS_ON, now);  persistGnssConfig(); io->println(F("GNSS on (rail powered, 115200 NMEA)")); return; }
+    if (strcmp(args, "off") == 0) { gnss.setMode(RNSGnss::GNSS_OFF, now); persistGnssConfig(); io->println(F("GNSS off")); return; }
+    if (strncmp(args, "interval", 8) == 0) {
+        long m = atol(args + 8);
+        if (m < 0 || m > 1440) { io->println(F("Interval 0 (continuous) to 1440 minutes")); return; }
+        gnss.setInterval((uint16_t)m, now); persistGnssConfig();
+        if (m == 0) io->println(F("GNSS continuous")); else { io->print(F("GNSS every ")); io->print(m); io->println(F(" min")); }
+        return;
+    }
+    if (strncmp(args, "dwell", 5) == 0) {
+        long sec = atol(args + 5);
+        if (sec < 30 || sec > 3600) { io->println(F("Dwell 30-3600 seconds")); return; }
+        gnss.dwellSec = (uint16_t)sec; persistGnssConfig();
+        io->print(F("GNSS dwell -> ")); io->print(sec); io->println(F(" s")); return;
+    }
+    io->println(F("Usage: gps | gps on|off | gps interval <min> | gps dwell <sec>"));
+#else
+    (void)args;
+    io->println(F("No GNSS on this board"));
+#endif
+}
+
+// ── Extra `status` lines: discovery, GNSS, display, power ──────────
+static void statusExtraLines(Stream* io) {
+    uint32_t now = millis();
+    io->print(F("  Discovery:  "));
+    if (!discovery.cfg.enabled) io->println(F("off"));
+    else {
+        io->print(discovery.stampReady ? F("on, stamp ready") : (discovery.searching ? F("on, computing stamp") : F("on, no stamp")));
+        io->print(F(", ")); io->print(discovery.announcesSent); io->print(F(" sent"));
+        if (discovery.stampReady) { io->print(F(", next in ")); io->print(discovery.nextAnnounceAt > now ? (discovery.nextAnnounceAt - now) / 60000UL : 0); io->print(F(" min")); }
+        io->println();
+    }
+    io->print(F("  Location:   "));
+    if (discovery.hasLocation()) {
+        io->print(discovery.cfg.latUdeg / 1e6, 5); io->print(F(", ")); io->print(discovery.cfg.lonUdeg / 1e6, 5);
+        if (discovery.cfg.haveHeight) { io->print(F(", ")); io->print(discovery.cfg.heightM); io->print(F(" m")); }
+        io->println();
+    } else io->println(F("not set"));
+#if HAS_GNSS
+    io->print(F("  GNSS:       "));
+    if (gnss.mode != RNSGnss::GNSS_ON) io->println(F("off"));
+    else {
+        io->print(gnss.powered ? F("powered") : F("sleeping"));
+        if (gnss.intervalMin) { io->print(F(" (every ")); io->print(gnss.intervalMin); io->print(F(" min)")); }
+        io->print(F(", ")); io->print(gnss.sats); io->print(F(" sats, "));
+        io->println(gnss.hasFix ? F("fix") : F("no fix"));
+    }
+    {
+        uint32_t u = gnss.unixNow(now);
+        io->print(F("  Clock:      "));
+        if (u) { io->print(F("unix ")); io->print(u); io->println(F(" (GNSS)")); } else io->println(F("uptime only"));
+    }
+#endif
+#if HAS_DISPLAY
+    io->print(F("  Display:    "));
+    if (!display.enabled) io->println(F("off"));
+    else { io->print(display.isAwake() ? F("awake") : F("blanked")); io->print(F(", page ")); io->print(display.currentPage() + 1);
+           io->print(F(", timeout ")); if (display.timeoutSec) { io->print(display.timeoutSec); io->println(F(" s")); } else io->println(F("never")); }
+#endif
+#if defined(PIN_BATT_ADC)
+    {
+        uint32_t mv = readBatteryMillivolts();
+        io->print(F("  Power:      "));
+        if (usbPowerPresent()) io->print(F("USB"));
+        if (mv > 2500) { if (usbPowerPresent()) io->print(F(", ")); io->print(F("battery ")); io->print(mv); io->print(F(" mV (")); io->print(batteryPercentFromMv(mv)); io->print(F("%)")); }
+        io->println();
+    }
+#endif
+}
+
 void RNSConsole::cmdDisplay(const char* args) {
 #if HAS_DISPLAY
     uint32_t now = millis();
@@ -2131,11 +2249,11 @@ void setup() {
     if (PIN_LED_RED >= 0) digitalWrite(PIN_LED_RED, ledLevel(false));
 
 #if defined(BOARD_HELTEC_T096)
-    // ── Heltec T096: park the peripherals this firmware does not use ──
-    // Vext (TFT + backlight rail) stays off; the radio is on VDD_3V3.
-    // GNSS rail is a PMOS: HIGH = off. Both match the board's own
-    // power-on defaults, asserted here so a warm reboot from another
-    // firmware cannot leave them on. FEM pins are handled in RNSRadio.
+    // ── Heltec T096: park the peripheral rails until their owners run ──
+    // Vext (TFT + backlight) is raised by RNSDisplay only while awake;
+    // the GNSS rail (PMOS, HIGH = off) is raised by RNSGnss on `gps on`.
+    // Asserted here so a warm reboot from another firmware cannot leave
+    // them on. FEM pins are handled in RNSRadio.
     pinMode(PIN_VEXT_CTRL, OUTPUT);
     digitalWrite(PIN_VEXT_CTRL, LOW);
     pinMode(PIN_GNSS_CTRL, OUTPUT);
@@ -2298,6 +2416,7 @@ void setup() {
 
     // ── Console ───────────────────────────────────────────
     console.begin(&Serial, &transport, &radio, &nodeIdentity, &persist);    console.keepAlive = wdtFeed;
+    console.statusExtra = statusExtraLines;
 
 #if HAS_DISPLAY
     {
@@ -2332,6 +2451,21 @@ void setup() {
         Serial.print(F("[DISC] discovery ")); Serial.print(discovery.cfg.enabled ? F("on") : F("off"));
         Serial.print(F(", stamp ")); Serial.println(discovery.stampReady ? F("cached") : (discovery.searching ? F("computing") : F("none")));
     }
+
+#if HAS_GNSS
+    {
+        GnssConfigBlob gc = {};
+        RNSGnss::Mode m = RNSGnss::GNSS_OFF;
+        if (persist.loadGnssConfig(gc)) {
+            if (gc.mode == 1) m = RNSGnss::GNSS_ON;
+            gnss.intervalMin = gc.intervalMin;
+            gnss.dwellSec = (gc.dwellSec >= 30) ? gc.dwellSec : 300;
+        }
+        gnss.begin(m, millis());
+        transport.wallClockSeconds = gnssWallClock;
+        Serial.print(F("[GNSS] UC6580 ")); Serial.println(m == RNSGnss::GNSS_ON ? F("on") : F("off"));
+    }
+#endif
     // ── Watchdog ──────────────────────────────────────────
     wdtInit();
 
@@ -2442,6 +2576,33 @@ void loop() {
 
 #if PIN_USER_BUTTON >= 0
     pollUserButton(now);
+#endif
+#if HAS_GNSS
+    gnss.loop(now);
+    {
+        // Push a fresh fix into the map position: on first fix, or after
+        // moving GNSS_LOCATION_SYNC_MIN_M, at most every holdoff period.
+        static uint32_t lastLocSyncAt = 0;
+        if (gnss.hasFix && (lastLocSyncAt == 0 || (now - lastLocSyncAt) >= GNSS_LOCATION_SYNC_HOLDOFF_MS)) {
+            double dLat = (discovery.cfg.latUdeg - gnss.latUdeg) / 1e6 * 111320.0;
+            double dLon = (discovery.cfg.lonUdeg - gnss.lonUdeg) / 1e6 * 111320.0 * cos(gnss.latUdeg / 1e6 * 3.14159265 / 180.0);
+            double moved = sqrt(dLat * dLat + dLon * dLon);
+            if (!discovery.hasLocation() || moved >= GNSS_LOCATION_SYNC_MIN_M ||
+                (gnss.hasAlt && (!discovery.cfg.haveHeight || fabs((double)discovery.cfg.heightM - gnss.altM) > 30.0))) {
+                discovery.cfg.latUdeg = gnss.latUdeg;
+                discovery.cfg.lonUdeg = gnss.lonUdeg;
+                if (gnss.hasAlt) { discovery.cfg.heightM = (int16_t)(gnss.altM + 0.5f); discovery.cfg.haveHeight = true; }
+                discovery.refresh(now);
+                persistDiscoveryConfig();
+                Serial.print(F("[GNSS] location -> ")); Serial.print(gnss.latUdeg / 1e6, 6); Serial.print(F(", "));
+                Serial.println(gnss.lonUdeg / 1e6, 6);
+            }
+            lastLocSyncAt = now;
+        }
+#if HAS_DISPLAY
+        display.setGnss((uint8_t)gnss.mode, gnss.hasFix, gnss.sats, gnss.latUdeg, gnss.lonUdeg, gnss.unixNow(now));
+#endif
+    }
 #endif
     if (discovery.loop(now)) {
         Serial.print(F("[DISC] stamp found after ")); Serial.print(discovery.attempts);

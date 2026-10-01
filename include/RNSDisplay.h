@@ -109,6 +109,10 @@ public:
 
     /// Battery reading supplied by the board code (see main.cpp).
     void setBattery(int8_t percent, bool onUsb) { battPercent = percent; battUsb = onUsb; }
+    /// GNSS summary supplied by main (rows 7-8 of STATUS). mode: 0 off, 1 on.
+    void setGnss(uint8_t mode, bool fix, uint8_t sats, int32_t latUdeg, int32_t lonUdeg, uint32_t unixNow) {
+        gMode = mode; gFix = fix; gSats = sats; gLat = latUdeg; gLon = lonUdeg; gUnix = unixNow;
+    }
 
     bool    isAwake() const { return awake; }
     uint8_t currentPage() const { return page; }
@@ -127,6 +131,7 @@ private:
     bool     dirty       = true;
     int8_t   battPercent = -1;     // -1 = unknown
     bool     battUsb     = false;
+    uint8_t  gMode = 0; bool gFix = false; uint8_t gSats = 0; int32_t gLat = 0, gLon = 0; uint32_t gUnix = 0;
     char     cache[ROWS][COLS + 1];
 
     static const uint16_t FG = ST77XX_WHITE;
@@ -263,8 +268,28 @@ private:
                  (unsigned)radio->curSF, (unsigned)radio->curCR, (int)radio->curTxDbm);
         putRow(6, line, radio->hwReady ? FG : WARN);
 
-        putRow(7, "");
-        putRow(8, "");
+        // 7: GNSS
+        if (gMode == 0) putRow(7, "GPS off");
+        else if (gFix) {
+            snprintf(line, sizeof(line), "GPS %2usat %.4f %.4f", (unsigned)gSats, (double)gLat / 1e6, (double)gLon / 1e6);
+            putRow(7, line);
+        } else {
+            snprintf(line, sizeof(line), "GPS %2usat searching", (unsigned)gSats);
+            putRow(7, line, WARN);
+        }
+        // 8: UTC clock when synced
+        if (gUnix) {
+            uint32_t t = gUnix; uint32_t days = t / 86400UL; uint32_t rem = t % 86400UL;
+            // civil from days (Howard Hinnant)
+            int64_t z = (int64_t)days + 719468; int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+            unsigned doe = (unsigned)(z - era * 146097); unsigned yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+            int y = (int)yoe + (int)era * 400; unsigned doy = doe - (365*yoe + yoe/4 - yoe/100);
+            unsigned mp = (5*doy + 2)/153; unsigned d = doy - (153*mp+2)/5 + 1; unsigned m = mp < 10 ? mp+3 : mp-9;
+            if (m <= 2) y++;
+            snprintf(line, sizeof(line), "UTC %02lu:%02lu:%02lu %04d-%02u-%02u",
+                     (unsigned long)(rem/3600), (unsigned long)((rem%3600)/60), (unsigned long)(rem%60), y, m, d);
+            putRow(8, line);
+        } else putRow(8, "");
         snprintf(line, sizeof(line), "%-16s     pg 1/%u", version, (unsigned)PAGE_COUNT);
         putRow(9, line, ACCENT);
     }
@@ -290,7 +315,8 @@ private:
         char line[COLS + 8];
         const PathEntry* pt = transport->getPathTable();
         uint32_t now = millis();
-        putRow(0, "PEERS  hash  name  hop dBm", ACCENT);
+        // Column layout matches the rows below: hash(0-3) name(5-13) hp(15-16) dBm(18-21) age(23-25)
+        putRow(0, "hash name      hp  dBm age", ACCENT);
         uint8_t row = 1;
         for (int i = 0; i < PATH_TABLE_MAX && row < ROWS - 1; i++) {
             if (!pt[i].active) continue;
@@ -298,13 +324,18 @@ private:
             snprintf(hash, sizeof(hash), "%02X%02X", pt[i].destHash[0], pt[i].destHash[1]);
             char name[10];
             strncpy(name, pt[i].peerName[0] ? pt[i].peerName : "-", 9); name[9] = '\0';
-            uint32_t age = (now - pt[i].learnedAt) / 1000UL;
+            // age in 3 chars: "45s", "17m", " 3h"
+            uint32_t ageS = (now - pt[i].learnedAt) / 1000UL;
+            char age[4];
+            if (ageS < 600)         snprintf(age, sizeof(age), "%2lus", (unsigned long)ageS);
+            else if (ageS < 36000)  snprintf(age, sizeof(age), "%2lum", (unsigned long)(ageS / 60));
+            else                    snprintf(age, sizeof(age), "%2luh", (unsigned long)(ageS / 3600 > 99 ? 99 : ageS / 3600));
             if (pt[i].lastRSSI != 0.0f)
-                snprintf(line, sizeof(line), "%s %-9s %2u %4.0f %3lus", hash, name,
-                         (unsigned)pt[i].hops, (double)pt[i].lastRSSI, (unsigned long)(age > 999 ? 999 : age));
+                snprintf(line, sizeof(line), "%s %-9s %2u %4.0f %s", hash, name,
+                         (unsigned)pt[i].hops, (double)pt[i].lastRSSI, age);
             else
-                snprintf(line, sizeof(line), "%s %-9s %2u  --- %3lus", hash, name,
-                         (unsigned)pt[i].hops, (unsigned long)(age > 999 ? 999 : age));
+                snprintf(line, sizeof(line), "%s %-9s %2u  --- %s", hash, name,
+                         (unsigned)pt[i].hops, age);
             putRow(row++, line);
         }
         if (row == 1) putRow(row++, "(no paths yet)", WARN);

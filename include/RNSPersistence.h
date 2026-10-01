@@ -84,6 +84,15 @@ struct DiscoveryConfigBlob {
 };
 #define DISCOVERY_CONFIG_VERSION 1
 
+struct GnssConfigBlob {
+    uint8_t  version;
+    uint8_t  mode;         // 0 off, 1 on
+    uint16_t intervalMin;  // 0 = continuous
+    uint16_t dwellSec;     // max seconds per cycle waiting for a fix
+    uint8_t  reserved[2];
+    uint32_t checksum;
+};
+
 struct SecurityConfigBlob {
     uint8_t enabled;
     uint8_t wipeOnBoot;
@@ -430,6 +439,7 @@ public:
         cfg.checksum = computeDisplayChecksum(cfg);
         InternalFS.remove(DISPLAY_CONFIG_FILE);
         InternalFS.remove(DISCOVERY_CONFIG_FILE);
+        InternalFS.remove(GNSS_CONFIG_FILE);
         File f = InternalFS.open(DISPLAY_CONFIG_FILE, FILE_O_WRITE);
         if (!f) return false;
         size_t written = f.write((uint8_t*)&cfg, sizeof(cfg));
@@ -475,6 +485,41 @@ public:
         size_t written = f.write((uint8_t*)&cfg, sizeof(cfg));
         f.close();
         return written == sizeof(cfg);
+#else
+        (void)inputCfg; return false;
+#endif
+    }
+
+    // ── GNSS config (/gps.bin) ───────────────────────────────
+    static uint32_t computeGnssChecksum(const GnssConfigBlob& cfg) {
+        uint32_t h = 2166136261UL; const uint8_t* b = (const uint8_t*)&cfg;
+        for (size_t i = 0; i < offsetof(GnssConfigBlob, checksum); i++) { h ^= b[i]; h *= 16777619UL; }
+        return h;
+    }
+    bool loadGnssConfig(GnssConfigBlob& cfg) {
+#ifndef NATIVE_TEST
+        if (!fsReady) return false;
+        File f = InternalFS.open(GNSS_CONFIG_FILE, FILE_O_READ);
+        if (!f) return false;
+        GnssConfigBlob stored;
+        if (f.read((uint8_t*)&stored, sizeof(stored)) != sizeof(stored)) { f.close(); return false; }
+        f.close();
+        if (computeGnssChecksum(stored) != stored.checksum) return false;
+        if (stored.version != GNSS_CONFIG_VERSION) { InternalFS.remove(GNSS_CONFIG_FILE); return false; }
+        cfg = stored; return true;
+#else
+        (void)cfg; return false;
+#endif
+    }
+    bool saveGnssConfig(const GnssConfigBlob& inputCfg) {
+#ifndef NATIVE_TEST
+        if (!fsReady) return false;
+        GnssConfigBlob cfg = inputCfg; cfg.version = GNSS_CONFIG_VERSION; cfg.checksum = computeGnssChecksum(cfg);
+        InternalFS.remove(GNSS_CONFIG_FILE);
+        File f = InternalFS.open(GNSS_CONFIG_FILE, FILE_O_WRITE);
+        if (!f) return false;
+        size_t w = f.write((uint8_t*)&cfg, sizeof(cfg)); f.close();
+        return w == sizeof(cfg);
 #else
         (void)inputCfg; return false;
 #endif

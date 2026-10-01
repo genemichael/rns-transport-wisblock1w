@@ -235,7 +235,9 @@ bool RNSTransport::sendEncryptedMessage(const char* text, PathEntry* peer) {
     // 1. Pack LXMF payload: [timestamp, title, content, fields]
     // All large buffers are static to avoid stack overflow (crypto calls are deep)
     static uint8_t packedContent[256];
-    uint16_t contentLen = packLxmfContent(text, millis(), packedContent, sizeof(packedContent));
+    uint32_t tsSeconds = wallClockSeconds ? wallClockSeconds() : 0;
+    if (tsSeconds == 0) tsSeconds = millis() / 1000UL;   // no wall clock: uptime, as before
+    uint16_t contentLen = packLxmfContent(text, tsSeconds, packedContent, sizeof(packedContent));
     if (contentLen == 0) return false;
 
     // 2. Build standard LXMF bytes:
