@@ -178,6 +178,9 @@ private:
         io->print(F("  Duplicates: ")); io->println(s.duplicates);
         io->print(F("  Invalid:    ")); io->println(s.invalidPackets);
         io->print(F("  Paths:      ")); io->println(s.pathEntries);
+        io->print(F("  TX detail:  ")); io->print(radio->txAttempts); io->print(F(" attempts, ")); io->print(radio->txOk);
+        io->print(F(" ok, ")); io->print(radio->txCadBusy); io->print(F(" CAD-busy, ")); io->print(radio->txErrors);
+        io->print(F(" errors, ")); io->print(radio->txCadBypass); io->println(F(" CAD-bypassed"));
         io->print(F("  RX bytes:   ")); io->println(radio->rxBytes);
         io->print(F("  TX bytes:   ")); io->println(radio->txBytes);
         if (radio->lastRSSI != 0.0f) {

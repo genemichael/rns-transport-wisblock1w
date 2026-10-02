@@ -29,6 +29,7 @@
 #include "RNSDisplay.h"
 #include "RNSDiscovery.h"
 #include "RNSGnss.h"
+#include "RNSVext.h"
 #include "RNSPersistence.h"
 #include "RNSDfu.h"
 #include <nrf_wdt.h>
@@ -42,6 +43,10 @@ static RNSDisplay     display;
 #endif
 static RNSDiscovery   discovery;
 uint8_t RNSDiscovery::workblock[DISCOVERY_WORKBLOCK_LEN];
+#if defined(PIN_VEXT_CTRL)
+uint8_t RNSVext::claims = 0;
+bool    RNSVext::on = false;
+#endif
 #if HAS_GNSS
 static RNSGnss        gnss;
 static uint32_t gnssWallClock() { return gnss.unixNow(millis()); }
@@ -2122,10 +2127,13 @@ void RNSConsole::cmdGps(const char* args) {
         } else io->println(gnss.powered ? F("no (searching)") : F("no"));
         io->print(F("  Sats/qual: ")); io->print(gnss.sats); io->print(F(" / ")); io->print(gnss.fixQuality);
         io->print(F("  HDOP ")); io->println(gnss.hdop, 1);
+        io->print(F("  RMC/GGA:   ")); io->print(gnss.rmcSeen); io->print(F(" RMC (")); io->print(gnss.rmcValid);
+        io->print(F(" valid), ")); io->print(gnss.ggaSeen); io->println(F(" GGA"));
+        if (gnss.lastRmc[0]) { io->print(F("  Last RMC:  ")); io->println(gnss.lastRmc); }
         io->print(F("  Clock:     "));
         uint32_t u = gnss.unixNow(now);
         if (u) { io->print(F("unix ")); io->println(u); } else io->println(F("not set"));
-        io->println(F("  Usage: gps on|off | gps interval <min> (0 = continuous) | gps dwell <sec>"));
+        io->println(F("  Usage: gps on|off | gps interval <min> (0 = continuous) | gps dwell <sec> | gps raw [sec]"));
         return;
     }
     if (strcmp(args, "on") == 0)  { gnss.setMode(RNSGnss::GNSS_ON, now);  persistGnssConfig(); io->println(F("GNSS on (rail powered, 115200 NMEA)")); return; }
@@ -2135,6 +2143,12 @@ void RNSConsole::cmdGps(const char* args) {
         if (m < 0 || m > 1440) { io->println(F("Interval 0 (continuous) to 1440 minutes")); return; }
         gnss.setInterval((uint16_t)m, now); persistGnssConfig();
         if (m == 0) io->println(F("GNSS continuous")); else { io->print(F("GNSS every ")); io->print(m); io->println(F(" min")); }
+        return;
+    }
+    if (strncmp(args, "raw", 3) == 0) {
+        long sec = atol(args + 3); if (sec <= 0) sec = 5; if (sec > 60) sec = 60;
+        gnss.rawTo = io; gnss.rawUntil = now + (uint32_t)sec * 1000UL;
+        io->print(F("Echoing NMEA for ")); io->print(sec); io->println(F(" s..."));
         return;
     }
     if (strncmp(args, "dwell", 5) == 0) {
@@ -2254,8 +2268,7 @@ void setup() {
     // the GNSS rail (PMOS, HIGH = off) is raised by RNSGnss on `gps on`.
     // Asserted here so a warm reboot from another firmware cannot leave
     // them on. FEM pins are handled in RNSRadio.
-    pinMode(PIN_VEXT_CTRL, OUTPUT);
-    digitalWrite(PIN_VEXT_CTRL, LOW);
+    RNSVext::begin();                       // Vext low until the display or GNSS claims it
     pinMode(PIN_GNSS_CTRL, OUTPUT);
     digitalWrite(PIN_GNSS_CTRL, HIGH);
 #endif
@@ -2579,6 +2592,15 @@ void loop() {
 #endif
 #if HAS_GNSS
     gnss.loop(now);
+#if HAS_DISPLAY
+    // The GNSS module's power-up inrush shares the Vext LDO with the
+    // panel; re-run the panel init once the module has settled.
+    {
+        static uint32_t reinitAt = 0;
+        if (gnss.justPoweredOn) { gnss.justPoweredOn = false; reinitAt = now + 300; }
+        if (reinitAt && now >= reinitAt) { reinitAt = 0; display.reinitIfAwake(); }
+    }
+#endif
     {
         // Push a fresh fix into the map position: on first fix, or after
         // moving GNSS_LOCATION_SYNC_MIN_M, at most every holdoff period.

@@ -48,6 +48,13 @@ public:
     float         lastSNR  = 0.0f;
     uint32_t      rxBytes  = 0;      // on-air bytes received (incl. RNode header)
     uint32_t      txBytes  = 0;      // on-air bytes sent (incl. RNode header)
+    // TX diagnostics (visible in `status`)
+    uint32_t      txAttempts   = 0;  // transmit() calls
+    uint32_t      txOk         = 0;  // packets fully sent (all frames TX_DONE)
+    uint32_t      txCadBusy    = 0;  // transmit() aborted: channel busy after all CAD tries
+    uint32_t      txErrors     = 0;  // startTransmit error or TX_DONE timeout
+    uint32_t      txCadBypass  = 0;  // sent without CAD after consecutive busy aborts
+    uint8_t       cadBusyStreak = 0; // consecutive CAD-busy aborts
     int           lastInitState = -1; // RadioLib error code from begin()
     uint8_t       initAttempts  = 0;
 
@@ -1019,12 +1026,27 @@ public:
 
 #ifndef NATIVE_TEST
         uint32_t txStart = millis();
+        txAttempts++;
 
         // CAD at SF8/BW125 completes in ~17 ms; 200 ms is generous.
         static const uint32_t CAD_TIMEOUT_MS = 200;
 
+        // CAD lockout guard: a site where CAD keeps reporting busy (a
+        // strong nearby transmitter, a noisy channel at this SF) would
+        // otherwise mute the node indefinitely while it still receives
+        // fine. After CAD_BUSY_STREAK_MAX consecutive aborts one packet
+        // is sent without CAD, which is what RNode's CSMA also degrades
+        // to; the streak then restarts.
+        static const uint8_t CAD_BUSY_STREAK_MAX = 3;
         bool channelFree = false;
-        for (int attempt = 0; attempt < 8; attempt++) {
+        bool bypassCad = (cadBusyStreak >= CAD_BUSY_STREAK_MAX);
+        if (bypassCad) {
+            channelFree = true;
+            txCadBypass++;
+            cadBusyStreak = 0;
+            Serial.println(F("[DIAG] CAD bypassed after repeated busy aborts"));
+        }
+        for (int attempt = 0; !channelFree && attempt < 8; attempt++) {
             // Ensure radio is in STBY before CAD — avoids -705 when
             // BUSY=NC leaves the chip in an indeterminate state.
             lora.standby();
@@ -1052,6 +1074,8 @@ public:
             delay(random(10, 50));
         }
         if (!channelFree) {
+            txCadBusy++;
+            if (cadBusyStreak < 255) cadBusyStreak++;
             Serial.print(F("[DIAG] TX aborted: channel busy after 8 CAD attempts ("));
             Serial.print(millis() - txStart); Serial.println(F("ms)"));
             // Restore RX mode so the radio isn't stuck in standby
@@ -1101,6 +1125,7 @@ public:
             state = lora.startTransmit(txBuf, txLen);
             if (state != RADIOLIB_ERR_NONE) {
                 txActive = false;
+                txErrors++;
                 Serial.print(F("[DIAG] startTransmit failed rc=")); Serial.println(state);
                 lora.startReceive();
                 return false;
@@ -1120,11 +1145,12 @@ public:
             state = lora.finishTransmit();
             txActive = false;
             rxFlag = false;   // TX_DONE raises the DIO1 ISR flag on boards with DIO1 wired
-            if (!txDone) { state = RADIOLIB_ERR_TX_TIMEOUT; break; }
+            if (!txDone) { state = RADIOLIB_ERR_TX_TIMEOUT; txErrors++; break; }
             txBytes += (uint32_t)txLen;
             sent += chunk;
             frameNo++;
         }
+        if (txDone && sent == len) { txOk++; if (!bypassCad) cadBusyStreak = 0; }
 
         uint32_t txElapsed = millis() - txStart;
         Serial.print(F("[DIAG] TX done: rc=")); Serial.print(state);

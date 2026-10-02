@@ -26,6 +26,7 @@
 
 #if HAS_GNSS && !defined(NATIVE_TEST)
 #include <Arduino.h>
+#include "RNSVext.h"
 
 class RNSGnss {
 public:
@@ -61,6 +62,10 @@ public:
     // Diagnostics
     uint32_t sentences = 0, badChecksum = 0, lastSentenceAt = 0;
     uint32_t poweredAt = 0;
+    uint32_t rmcSeen = 0, rmcValid = 0, ggaSeen = 0;
+    char     lastRmc[100] = {0};     // last RMC sentence as received (for `gps raw`)
+    Stream*  rawTo = nullptr;        // when set, every sentence is echoed here
+    uint32_t rawUntil = 0;
 
     void begin(Mode m, uint32_t now) {
         pinMode(PIN_GNSS_CTRL, OUTPUT);
@@ -129,8 +134,12 @@ private:
     bool     inLine  = false;
 
     void powerOn(uint32_t now) {
+        // The GNSS rail is switched from Vext (schematic: Q3 source is
+        // Vext_3V3), so Vext must be up first and held while we run.
+        RNSVext::claim(RNSVext::VEXT_GNSS);
         digitalWrite(PIN_GNSS_CTRL, LOW);        // PMOS: LOW = rail on
         delay(50);
+        justPoweredOn = true;
         Serial1.setPins(PIN_GNSS_RX, PIN_GNSS_TX);
         Serial1.begin(GNSS_BAUD);
         powered = true; poweredAt = now;
@@ -142,11 +151,16 @@ private:
     void powerOff(bool keepFix) {
         if (powered) Serial1.end();
         digitalWrite(PIN_GNSS_CTRL, HIGH);
+        RNSVext::release(RNSVext::VEXT_GNSS);        // rail stays up if the display holds it
         powered = false;
         if (!keepFix) { hasFix = false; sats = 0; fixQuality = 0; }
         firstFixAt = 0;
     }
     uint32_t firstFixAt = 0;
+public:
+    /// Set by powerOn(); main clears it after re-initialising the display.
+    bool justPoweredOn = false;
+private:
 
     static bool checksumOk(const char* s, uint8_t len, uint8_t& payloadEnd) {
         // s = "$....*hh"
@@ -202,9 +216,11 @@ private:
     }
 
     void handleLine(uint32_t now) {
+        if (rawTo) { if (now < rawUntil) rawTo->println(line); else rawTo = nullptr; }
         uint8_t end = 0;
         if (!checksumOk(line, lineLen, end)) { badChecksum++; return; }
         sentences++; lastSentenceAt = now;
+        if (lineLen > 5 && strncmp(line + 3, "RMC", 3) == 0) { rmcSeen++; strncpy(lastRmc, line, sizeof(lastRmc) - 1); lastRmc[sizeof(lastRmc) - 1] = '\0'; }
         const char* f[20]; uint8_t n = split(line, end, f, 20);
         if (n < 2) return;
         const char* id = f[0];                     // e.g. "GNRMC"
@@ -225,6 +241,7 @@ private:
                 }
             }
             if (valid) {
+                rmcValid++;
                 latUdeg = nmeaToUdeg(f[3], f[4][0]);
                 lonUdeg = nmeaToUdeg(f[5], f[6][0]);
                 bool nowFix = (latUdeg != 0 || lonUdeg != 0);
@@ -233,6 +250,7 @@ private:
                 if (hasFix) lastFixAt = now;
             }
         } else if (strcmp(id + 2, "GGA") == 0 && n >= 10) {
+            ggaSeen++;
             // 6 fix quality, 7 sats, 8 hdop, 9 altitude
             fixQuality = (uint8_t)atoi(f[6]);
             sats = (uint8_t)atoi(f[7]);

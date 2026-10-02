@@ -36,6 +36,7 @@
 #include <Adafruit_ST7735.h>
 #include "RNSTransport.h"
 #include "RNSRadio.h"
+#include "RNSVext.h"
 
 extern "C" char* sbrk(int incr);
 
@@ -53,8 +54,6 @@ public:
         transport = txp; radio = rad; version = fwVersion;
         pinMode(PIN_TFT_BL, OUTPUT);
         backlight(false);
-        pinMode(PIN_VEXT_CTRL, OUTPUT);
-        digitalWrite(PIN_VEXT_CTRL, LOW);
         for (uint8_t r = 0; r < ROWS; r++) cache[r][0] = '\0';
         if (!enabled) return true;
         return powerOn(millis());
@@ -147,9 +146,13 @@ private:
 #endif
     }
 
-    bool powerOn(uint32_t now) {
-        digitalWrite(PIN_VEXT_CTRL, HIGH);
-        delay(20);                                  // CE6260 LDO settle
+public:
+    /// Re-run the panel init on an already-powered rail (after another
+    /// Vext consumer powered up and may have sagged the rail).
+    void reinitIfAwake() { if (awake) initPanel(); }
+
+private:
+    void initPanel() {
         if (!spi) {
             spi = new SPIClass(NRF_SPIM2, PIN_TFT_MISO_UNUSED, PIN_TFT_SCK, PIN_TFT_MOSI);
             spi->begin();
@@ -160,11 +163,20 @@ private:
         tft->fillScreen(BG);
         tft->setTextWrap(false);
         tft->setTextSize(1);
+        invalidate();
+        render();
+    }
+
+    bool powerOn(uint32_t now) {
+        // Vext is shared with the GNSS rail (RNSVext). If the GNSS already
+        // holds it the rail is stable; otherwise claim() raises it and
+        // waits for the LDO to settle before the panel is touched.
+        RNSVext::claim(RNSVext::VEXT_DISPLAY);
+        delay(20);
         present = true;
         awake = true;
         wakeAt = now;
-        invalidate();
-        render();
+        initPanel();
         backlight(true);
         return true;
     }
@@ -172,8 +184,8 @@ private:
     void powerOff() {
         backlight(false);
         if (tft) { tft->enableDisplay(false); tft->enableSleep(true); }
-        digitalWrite(PIN_VEXT_CTRL, LOW);
         awake = false;
+        RNSVext::release(RNSVext::VEXT_DISPLAY);     // rail stays up if the GNSS holds it
     }
 
     void invalidate() {

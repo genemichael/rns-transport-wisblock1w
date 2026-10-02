@@ -164,7 +164,10 @@ inline long random(long a, long b) { return a + (rand() % (b - a)); }
 #define PIN_GNSS_CTRL        6   // P0.06 PMOS gate: LOW = GNSS rail on, HIGH = off
 
 // ── UC6580 GNSS (schematic sheet 1, U10) ──────────────────────────────
-#define HAS_GNSS             1
+// Parked 2026-10-01 (Gene): compiled out until revisited. The GNSS rail
+// is switched from Vext, which the display also owns (see RNSVext.h);
+// the shared-rail handling is in place but the feature is off.
+#define HAS_GNSS             0
 #define PIN_GNSS_RX         23   // P0.23  GNSS_TX net → nRF UART RX
 #define PIN_GNSS_TX         25   // P0.25  GNSS_RX net ← nRF UART TX
 #define PIN_GNSS_RESET      46   // P1.14  active LOW, held HIGH
