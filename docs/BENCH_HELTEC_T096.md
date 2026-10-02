@@ -86,6 +86,16 @@ captured frame verifies with Python Ed25519 at the new offsets.
 
 ## 4. Transmit and power
 
+**2026-10-01 finding:** CTX (P1.09) was held LOW; the KCT8103L needs CTX
+HIGH during TX. Symptom: heard at -58..-76 dBm from 10 cm by an Ikoka
+Stick, never heard at the deployment site, receive fine. Fixed by
+driving CTX as RadioLib's TXEN. Re-run the RSSI check below after the
+fix; a power-meter table is still the real sign-off.
+
+- [ ] Two-radio check: Ikoka `peers` RSSI for the T096 at 10 cm, before
+      fix -58..-76 dBm → after fix expect ~-5..-20 dBm.
+
+
 - [ ] Power meter on the IPEX (through a known attenuator). `set txpower`
       at 5, 10, 14, 18. Expected from the Prns gain table: ~19, ~24,
       ~27, ~28 dBm. Record the actual figures here:

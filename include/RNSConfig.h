@@ -146,16 +146,24 @@ inline long random(long a, long b) { return a + (rand() % (b - a)); }
 #define PIN_LORA_DIO1_PIN   21   // P0.21
 #define PIN_LORA_BUSY       19   // P0.19
 #define PIN_LORA_RESET      16   // P0.16
-#define PIN_LORA_RXEN       -1   // RX/TX path select is DIO2 → CPS
+#define PIN_LORA_RXEN       -1   // no separate RX-enable line
+#define PIN_LORA_TXEN       41   // P1.09 PA_CTX: KCT8103L needs CTX HIGH during TX,
+                                 // LOW for the RX LNA path. Driven per packet by
+                                 // RadioLib (setRfSwitchPins), CPS by DIO2.
 #define PIN_LORA_ENABLE     -1   // radio rail is always on (VDD_3V3)
 #define RADIO_HAS_RAK_PIN_DISCOVERY 0  // fixed, schematic-verified pin map
 
-// KCT8103L front-end control. Consumed by RNSRadio::begin() — the PA
-// is enabled once, before the SX1262 is reset, and is never toggled
-// per packet (DIO2/CPS does the per-packet TX/RX switching).
+// KCT8103L front-end control (MeshCore variants/heltec_t096/LoRaFEMControl):
+//   TX:      CSD=1, CTX=1, CPS=1      RX (LNA): CSD=1, CTX=0, CPS=0
+// VFEM and CSD are enabled once in RNSRadio::begin(). CTX MUST toggle
+// per packet: it is PIN_LORA_TXEN above, so RadioLib raises it for
+// every transmit and drops it for receive; DIO2 drives CPS. Holding CTX
+// low (builds up to 2026-10-01) sent TX through the receive path: the
+// node was heard at -60..-76 dBm from 10 cm, ~50 dB low, and never at
+// the deployment site, while it received everyone fine.
 #define PIN_PA_VFEM         30   // P0.30  VFEM_Ctrl  → HIGH
 #define PIN_PA_CSD          12   // P0.12  PA_CSD     → HIGH
-#define PIN_PA_CTX          41   // P1.09  PA_CTX     → LOW (RX LNA path)
+#define PIN_PA_CTX          PIN_LORA_TXEN   // P1.09, per-packet via RadioLib
 #define PA_SETTLE_MS         5
 
 // Peripherals: Vext (TFT rail) is owned by RNSDisplay and is only high
@@ -255,6 +263,10 @@ inline long random(long a, long b) { return a + (rand() % (b - a)); }
 #define DISPLAY_TIMEOUT_MAX_SEC      3600
 #define DISPLAY_REFRESH_MS           1000
 #define DISPLAY_CONFIG_VERSION       1
+
+#ifndef PIN_LORA_TXEN
+#define PIN_LORA_TXEN       -1
+#endif
 
 // ── LoRa default parameters ──────────────────────────────
 #define LORA_FREQ_MHZ       915.0f   // US ISM band

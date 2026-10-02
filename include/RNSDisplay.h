@@ -334,8 +334,12 @@ private:
             if (!pt[i].active) continue;
             char hash[6];
             snprintf(hash, sizeof(hash), "%02X%02X", pt[i].destHash[0], pt[i].destHash[1]);
+            // 9 chars of name; skip a leading "RatTunnel " so the part that
+            // differs between nodes is what fits.
+            const char* src = pt[i].peerName[0] ? pt[i].peerName : "-";
+            if (strncmp(src, "RatTunnel ", 10) == 0 && src[10]) src += 10;
             char name[10];
-            strncpy(name, pt[i].peerName[0] ? pt[i].peerName : "-", 9); name[9] = '\0';
+            strncpy(name, src, 9); name[9] = '\0';
             // age in 3 chars: "45s", "17m", " 3h"
             uint32_t ageS = (now - pt[i].learnedAt) / 1000UL;
             char age[4];

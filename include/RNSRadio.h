@@ -813,14 +813,14 @@ public:
         pinMode(PIN_PA_VFEM, OUTPUT);
         digitalWrite(PIN_PA_VFEM, HIGH);
         pinMode(PIN_PA_CTX, OUTPUT);
-        digitalWrite(PIN_PA_CTX, LOW);
+        digitalWrite(PIN_PA_CTX, LOW);        // idle = RX LNA; RadioLib raises it for TX
         pinMode(PIN_PA_CSD, OUTPUT);
         digitalWrite(PIN_PA_CSD, HIGH);
         delay(PA_SETTLE_MS);
         Serial.print(F("[DIAG] FEM enabled: VFEM(P")); Serial.print(PIN_PA_VFEM);
         Serial.print(F(")=1 CSD(P")); Serial.print(PIN_PA_CSD);
         Serial.print(F(")=1 CTX(P")); Serial.print(PIN_PA_CTX);
-        Serial.println(F(")=0 (RX LNA)"));
+        Serial.println(F(") per-packet TXEN"));
 #endif
 
         // Hard reset, then wait for BUSY to drop.
@@ -879,8 +879,13 @@ public:
         // RXEN (see RNSConfig.h).
         Serial.println(F("[DIAG] SX1262 configuring DIO2-as-TXEN / RXEN / DCDC..."));
         lora.setDio2AsRfSwitch(true);
-#if PIN_LORA_RXEN >= 0
-        lora.setRfSwitchPins(PIN_LORA_RXEN, RADIOLIB_NC);
+#if PIN_LORA_RXEN >= 0 || PIN_LORA_TXEN >= 0
+        // RadioLib drives these per mode: TXEN high only while transmitting,
+        // RXEN high only while receiving, both low in standby.
+        lora.setRfSwitchPins(PIN_LORA_RXEN >= 0 ? (uint32_t)PIN_LORA_RXEN : RADIOLIB_NC,
+                             PIN_LORA_TXEN >= 0 ? (uint32_t)PIN_LORA_TXEN : RADIOLIB_NC);
+        Serial.print(F("[DIAG] RF switch pins: RXEN=")); Serial.print(PIN_LORA_RXEN);
+        Serial.print(F(" TXEN=")); Serial.println(PIN_LORA_TXEN);
 #endif
         lora.setRegulatorDCDC();
         lora.setCRC(true);

@@ -400,9 +400,12 @@ public:
         // transport node, hops >= 1) must not become a path to ourselves,
         // and must not be rebroadcast again. Reference RNS drops announces
         // for destinations it owns at the same point.
-        if (announceHashCacheReady &&
-            memcmp(pkt.destHash, cachedTransportDestHash, RNS_ADDR_LEN) == 0) {
-            return;
+        // Any destination of OUR identity (lxmf.delivery, discovery, ...):
+        // the announce carries the 64-byte public key first.
+        if (identity && identity->initialized) {
+            uint8_t ourPub[RNS_KEYSIZE];
+            identity->getPublicKey(ourPub);
+            if (memcmp(pkt.data, ourPub, RNS_KEYSIZE) == 0) return;
         }
 
         // Extract peer name and messages from announce appData
