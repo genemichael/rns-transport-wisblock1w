@@ -92,8 +92,9 @@ Stick, never heard at the deployment site, receive fine. Fixed by
 driving CTX as RadioLib's TXEN. Re-run the RSSI check below after the
 fix; a power-meter table is still the real sign-off.
 
-- [ ] Two-radio check: Ikoka `peers` RSSI for the T096 at 10 cm, before
-      fix -58..-76 dBm → after fix expect ~-5..-20 dBm.
+- [x] Two-radio check 2026-10-01: Ikoka `peers` RSSI for the T096 at
+      10 cm: before fix -58..-76 dBm, after fix 0..-7 dBm (node announce
+      192 B at -5/-0/-7, map announce frames at -0). ~55 dB recovered.
 
 
 - [ ] Power meter on the IPEX (through a known attenuator). `set txpower`
