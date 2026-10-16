@@ -32,10 +32,10 @@ inline long random(long a, long b) { return a + (rand() % (b - a)); }
 // ── Firmware version ──────────────────────────────────────
 #define FW_VERSION_MAJOR    1
 #define FW_VERSION_MINOR    0
-#define FW_VERSION_PATCH    33
-#define FW_VERSION_STRING   "1.0.33"
+#define FW_VERSION_PATCH    34
+#define FW_VERSION_STRING   "1.0.34"
 #define FW_PRODUCT_NAME     "RatTunnel"
-#define FW_DISPLAY_VERSION  "RatTunnel V. 1.0.33"
+#define FW_DISPLAY_VERSION  "RatTunnel V. 1.0.34"
 #if defined(BOARD_IKOKA_STICK)
 #define FW_BUILD_TAG        "rattunnel-ikoka-stick"
 #elif defined(BOARD_HELTEC_T096)

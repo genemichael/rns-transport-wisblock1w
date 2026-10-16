@@ -1,4 +1,4 @@
-# RatTunnel V. 1.0.33 — WisBlock 1W / Ikoka Stick / Heltec T096
+# RatTunnel V. 1.0.34 — WisBlock 1W / Ikoka Stick / Heltec T096
 
 > **Ikoka Stick (Seeed XIAO nRF52840 + EBYTE E22-900M30S) is an added
 > target** — env `ikoka_stick_transport`. See
@@ -18,7 +18,7 @@ It is designed for safe field updates with:
 
 ## Current Status
 
-- Firmware brand/version: `RatTunnel V. 1.0.33`
+- Firmware brand/version: `RatTunnel V. 1.0.34`
 - Hardware target: WisBlock 1W (`nRF52840 + SX1262`)
 - Primary flashing path: Web flasher (`flasher/index.html`) served over HTTP
 - Secondary flashing path: UF2 drag-and-drop bootloader drive
