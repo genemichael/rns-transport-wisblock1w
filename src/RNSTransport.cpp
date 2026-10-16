@@ -4,6 +4,9 @@
  *        object (forward declarations break header-only builds).
  */
 #include "RNSTransport.h"
+#ifndef NATIVE_TEST
+#include "RNSEntropy.h"
+#endif
 #include "RNSRadio.h"
 #ifndef NATIVE_TEST
 #include <SHA256.h>
@@ -105,9 +108,13 @@ bool RNSTransport::sendAnnounceFor(const uint8_t destHash[RNS_ADDR_LEN],
     // [nameHash 10B]
     memcpy(announceData + RNS_KEYSIZE, nameHash, RNS_NAME_HASH_LEN);
     // [randomBlob 10B]
+#ifndef NATIVE_TEST
+    RNSEntropy::randomBytes(announceData + RNS_KEYSIZE + RNS_NAME_HASH_LEN, RNS_RANDOM_BLOB_LEN);
+#else
     for (uint16_t i = 0; i < RNS_RANDOM_BLOB_LEN; i++) {
         announceData[RNS_KEYSIZE + RNS_NAME_HASH_LEN + i] = (uint8_t)random(0, 256);
     }
+#endif
 
     // Reference Reticulum layout (RNS/Destination.py announce()):
     //   pubkey|nameHash|randomHash|SIGNATURE|appData
@@ -191,9 +198,13 @@ bool RNSTransport::sendDiscoverySweep() {
     if (!pathReqHashReady) return false;
 
     uint8_t requestData[RNS_ADDR_LEN * 2] = {0};
+#ifndef NATIVE_TEST
+    RNSEntropy::randomBytes(requestData + RNS_ADDR_LEN, RNS_ADDR_LEN);
+#else
     for (uint8_t i = RNS_ADDR_LEN; i < (RNS_ADDR_LEN * 2); i++) {
         requestData[i] = (uint8_t)random(0, 256);
     }
+#endif
 
     RNSPacket pkt;
     pkt.ifacFlag = false;

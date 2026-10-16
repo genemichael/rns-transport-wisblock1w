@@ -30,6 +30,7 @@
 #include "RNSDiscovery.h"
 #include "RNSGnss.h"
 #include "RNSVext.h"
+#include "RNSEntropy.h"
 #include "RNSPersistence.h"
 #include "RNSDfu.h"
 #include <nrf_wdt.h>
@@ -2252,6 +2253,21 @@ void RNSConsole::cmdDisplay(const char* args) {
 #endif
 }
 
+// ── identity regen (console) ──────────────────────────────
+static void identityRegenerate(Stream* io) {
+    io->println(F("Generating a new hardware-seeded identity..."));
+    nodeIdentity.generate();
+    if (!persist.saveIdentity(nodeIdentity)) { io->println(F("FAILED to save identity")); return; }
+    transport.initDestHashCache();          // recomputes the lxmf.delivery hashes from the new key
+    discovery.begin(&transport, &nodeIdentity, &radio);   // new dest/transport hashes, re-stamp
+    io->print(F("New identity hash: "));
+    for (int i = 0; i < RNS_ADDR_LEN; i++) { if (nodeIdentity.identityHash[i] < 0x10) io->print('0'); io->print(nodeIdentity.identityHash[i], HEX); }
+    io->println();
+    io->println(F("All of this node's destination hashes have changed. Rebooting to apply cleanly..."));
+    io->flush(); delay(300);
+    NVIC_SystemReset();
+}
+
 // ── Setup ─────────────────────────────────────────────────
 void setup() {
     // LEDs
@@ -2334,12 +2350,18 @@ void setup() {
         emitRatHoleStatus(Serial);
     }
 
-    // ── Identity ──────────────────────────────────────────
+    // ── Entropy, then identity ────────────────────────────
+    RNSEntropy::begin();     // hardware-seeded Crypto RNG + libc rand() (see RNSEntropy.h)
     Serial.print(F("[RNS] Identity: "));
     if (!wipedOnBoot && persist.loadIdentity(nodeIdentity)) {
         Serial.println(F("loaded from flash"));
     } else {
-        Serial.print(F("generating... "));
+        if (persist.lastIdentityWasLegacy) {
+            Serial.println(F("REGENERATING — the stored identity predates hardware RNG seeding"));
+            Serial.println(F("[RNS]   (builds before 2026-10-16 derived the same key pair on every board;"));
+            Serial.println(F("[RNS]    those keys are public. This node's hashes change now.)"));
+        }
+        Serial.print(F("[RNS] Identity: generating with hardware entropy... "));
         nodeIdentity.generate();
         persist.saveIdentity(nodeIdentity);
         Serial.println(F("done (saved)"));
@@ -2430,6 +2452,7 @@ void setup() {
     // ── Console ───────────────────────────────────────────
     console.begin(&Serial, &transport, &radio, &nodeIdentity, &persist);    console.keepAlive = wdtFeed;
     console.statusExtra = statusExtraLines;
+    console.identityRegen = identityRegenerate;
 
 #if HAS_DISPLAY
     {
@@ -2527,6 +2550,7 @@ static inline void scheduleNextDiscovery(uint32_t now) {
 
 void loop() {
     wdtFeed();
+    RNSEntropy::service(millis());   // keep the Crypto RNG stirred with hardware entropy
 
     // Poll radio for received packets (interrupt-driven flag check)
     radio.poll();

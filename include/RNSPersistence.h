@@ -101,7 +101,24 @@ struct SecurityConfigBlob {
 };
 
 // ── Identity blob layout (fixed 160 bytes) ────────────────
+// v1 (through 2026-10-16): keys only. Those keys came from an unseeded
+// RNG and are identical on every board (see RNSEntropy.h), so a v1 file
+// is deliberately NOT accepted: loadIdentity() reports it as legacy and
+// the caller regenerates with hardware entropy and saves a v2 blob.
+#define IDENTITY_BLOB_MAGIC   0x52544944UL   // "RTID"
+#define IDENTITY_BLOB_VERSION 2
 struct IdentityBlob {
+    uint32_t magic;
+    uint8_t  version;
+    uint8_t  seeded;        // 1 = generated after RNSEntropy seeding
+    uint8_t  reserved[2];
+    uint8_t  privEncKey[32];
+    uint8_t  privSigKey[64];
+    uint8_t  pubEncKey[32];
+    uint8_t  pubSigKey[32];
+    uint32_t checksum;
+};
+struct IdentityBlobV1 {
     uint8_t  privEncKey[32];
     uint8_t  privSigKey[64];
     uint8_t  pubEncKey[32];
@@ -134,22 +151,32 @@ public:
      * @brief Try to load identity from flash; return false if not found
      *        or corrupted (caller should generate fresh).
      */
+    /// Set by loadIdentity() when the file was a pre-seeding (v1) blob.
+    bool lastIdentityWasLegacy = false;
+
     bool loadIdentity(RNSIdentity& id) {
 #ifndef NATIVE_TEST
+        lastIdentityWasLegacy = false;
         if (!fsReady) return false;
 
         File f = InternalFS.open(IDENTITY_FILE, FILE_O_READ);
         if (!f) return false;
 
-        IdentityBlob blob;
-        if (f.read((uint8_t*)&blob, sizeof(blob)) != sizeof(blob)) {
-            f.close();
-            return false;
-        }
+        uint8_t raw[sizeof(IdentityBlob)];
+        size_t n = f.read(raw, sizeof(raw));
         f.close();
 
-        // Verify checksum
+        if (n == sizeof(IdentityBlobV1)) {
+            // Legacy unseeded identity: refuse it so the caller regenerates.
+            lastIdentityWasLegacy = true;
+            return false;
+        }
+        if (n != sizeof(IdentityBlob)) return false;
+        IdentityBlob blob;
+        memcpy(&blob, raw, sizeof(blob));
+        if (blob.magic != IDENTITY_BLOB_MAGIC || blob.version != IDENTITY_BLOB_VERSION) return false;
         if (computeBlobChecksum(blob) != blob.checksum) return false;
+        if (!blob.seeded) { lastIdentityWasLegacy = true; return false; }
 
         id.load(blob.privEncKey, blob.privSigKey,
                 blob.pubEncKey,  blob.pubSigKey);
@@ -167,7 +194,10 @@ public:
 #ifndef NATIVE_TEST
         if (!fsReady) return false;
 
-        IdentityBlob blob;
+        IdentityBlob blob = {};
+        blob.magic = IDENTITY_BLOB_MAGIC;
+        blob.version = IDENTITY_BLOB_VERSION;
+        blob.seeded = 1;
         id.exportKeys(blob.privEncKey, blob.privSigKey,
                       blob.pubEncKey,  blob.pubSigKey);
         blob.checksum = computeBlobChecksum(blob);

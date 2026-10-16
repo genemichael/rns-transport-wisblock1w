@@ -225,6 +225,19 @@ From the Heltec V0.2 schematic net table, raw nRF52840 numbering:
 The SX1262 supply (VDD_IN / VBAT) is on the always-on VDD_3V3 LDO, not
 on Vext, so the radio runs with the display rail off.
 
+## Security notice (2026-10-16): regenerate identities
+
+Builds before 2026-10-16 generated the node identity from an unseeded
+RNG, so **every board produced the same key pair**, and that key pair is
+derivable from the Crypto library's source. Two nodes on one network
+showed the same identity hash. From this build on, key generation, IVs
+and nonces use the nRF52840 hardware RNG (`include/RNSEntropy.h`), and
+the stored identity file is versioned: a node with a pre-fix identity
+regenerates it automatically on the first boot of this firmware and
+logs `[RNS] Identity: REGENERATING`. Its identity, `lxmf.delivery` and
+discovery hashes change; re-add it in your clients and expect RMAP to
+show a new entry. `identity regen` rotates the key pair on demand.
+
 ## Air framing: RNode split packets
 
 Every LoRa frame carries RNode's one-byte header (`seq << 4 | flags`).

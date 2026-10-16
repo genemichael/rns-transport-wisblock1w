@@ -36,6 +36,7 @@ public:
     bool            pktDumpEnabled = false;
     void          (*keepAlive)() = nullptr;  // WDT feed callback
     void          (*statusExtra)(Stream*) = nullptr;  // board/feature lines appended to `status` (main.cpp)
+    void          (*identityRegen)(Stream*) = nullptr; // `identity regen`: new seeded key pair (main.cpp)
 
     char    cmdBuf[128];
     uint8_t cmdPos = 0;
@@ -112,7 +113,7 @@ private:
         if      (strcmp(command, "status")    == 0) cmdStatus();
         else if (strcmp(command, "routes")    == 0) cmdRoutes();
         else if (strcmp(command, "peers")     == 0) cmdPeers();
-        else if (strcmp(command, "identity")  == 0) cmdIdentity();
+        else if (strcmp(command, "identity")  == 0) cmdIdentity(args);
         else if (strcmp(command, "stats")     == 0) cmdStatus();
         else if (strcmp(command, "radio")     == 0) cmdRadio();
         else if (strcmp(command, "set")       == 0) cmdSet(args);
@@ -300,11 +301,17 @@ private:
     }
 
     // ── identity ──────────────────────────────────────────
-    void cmdIdentity() {
+    void cmdIdentity(const char* args) {
+        if (args && strcmp(args, "regen") == 0) {
+            if (identityRegen) identityRegen(io);
+            else io->println(F("Regeneration not available in this build"));
+            return;
+        }
         io->println(F("── Node Identity ──"));
         io->print(F("  Hash:       ")); printHex(identity->identityHash, RNS_ADDR_LEN); io->println();
         io->print(F("  X25519 pub: ")); printHex(identity->pubEncKey, 32); io->println();
         io->print(F("  Ed25519 pub: ")); printHex(identity->pubSigKey, 32); io->println();
+        io->println(F("  identity regen  → new hardware-seeded key pair (changes every hash of this node)"));
     }
 
     // ── radio ─────────────────────────────────────────────
@@ -1971,7 +1978,7 @@ private:
         io->println(F("  status         Node status and counters"));
         io->println(F("  routes         Show routing table"));
         io->println(F("  peers          Show known peers (name, RSSI, SNR)"));
-        io->println(F("  identity       Display node identity hash + keys"));
+        io->println(F("  identity       Display node identity hash + keys | identity regen"));
         io->println(F("  radio          Current radio configuration"));
         io->println(F("  set <p> <v>    Set radio param (freq/sf/bw/cr/txpower/syncword/preamble)"));
         io->println(F("  profile <p>    One-shot radio preset (rnode-eu/rnode-us/ratspeak-us)"));

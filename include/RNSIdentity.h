@@ -13,6 +13,7 @@
 #include <Curve25519.h>
 #include <SHA256.h>
 #include <AES.h>
+#include "RNSEntropy.h"
 #endif
 #include <string.h>
 
@@ -44,6 +45,9 @@ public:
 
     // ── Generate a fresh random identity ──────────────────
     void generate() {
+#ifndef NATIVE_TEST
+        RNSEntropy::begin();     // never generate keys from an unseeded RNG
+#endif
         Curve25519::dh1(pubEncKey, privEncKey);
         Ed25519::generatePrivateKey(privSigKey);
         Ed25519::derivePublicKey(pubSigKey, privSigKey);
@@ -495,7 +499,7 @@ public:
         const uint8_t* encKey = derivedKey + 32;      // 32 bytes
         // Random IV
         static uint8_t iv[16];
-        for (int i = 0; i < 16; i++) iv[i] = (uint8_t)random(0, 256);
+        RNSEntropy::randomBytes(iv, 16);
         // PKCS7 pad
         static uint8_t padded[RNS_MTU];
         memcpy(padded, plain, plainLen);
